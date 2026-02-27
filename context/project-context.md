@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-02-27 (Session 6)
+# Last updated: 2026-02-27 (Session 7)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -72,6 +72,7 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-025 | No wake word — button-only activation | With button-first (DD-021) and no VAD, wake word serves no purpose. Removed entirely. No always-on mic, no background audio processing. |
 | DD-026 | Provider-managed context | No centralized context budget scaling. Each provider knows its own limits; agent framework passes full ideal prompt, provider handles truncation. Simplifies architecture. |
 | DD-027 | Tool development pipeline | Structured lifecycle: Specify → Develop → Review → Approve → Deploy. Tools start at Tier 2, promote after supervised use. Sandbox testing, version control, rollback. |
+| DD-028 | Context assembly & memory system | Context Assembler builds prompts in priority order (system → request → tools → memories → summary → history). Rolling summary during TTS playback for 4K NPU coherence. 5 memory tiers with post-session LLM extraction. Automatic semantic retrieval (~20-40ms, CPU embedding) injects memories into prompts. all-MiniLM-L6-v2 + sqlite-vec. |
 
 ## Architecture
 Seven-layer stack:
@@ -117,6 +118,10 @@ Seven-layer stack:
 - Model Provider Layer: provider-agnostic Protocol interfaces for LLM, ASR, TTS, VLM. Seven providers: axcl (local NPU), openai, anthropic, google, xai, ollama, openai_compatible. Per-profile provider chains with fallback and circuit breaker. Tool calling format auto-adapted per provider (NousFnCallPrompt for Qwen3, OpenAI function calling for cloud, etc.). Context is provider-managed — each provider handles its own limits, no centralized budget scaling. API keys in .env, cloud calls gated by security layer with auto nftables management. Default: fully offline (axcl only).
 - SenseVoice-Small ASR: non-autoregressive single-pass inference, 50-75ms per utterance on NPU (10-20x faster than Whisper-Small's 800-1800ms autoregressive decoding). Comparable English accuracy. Faster Whisper cannot use NPU (CPU-only via CTranslate2).
 - Tool development pipeline: Specify → Develop → Review → Approve → Deploy lifecycle. Tools start at Tier 2, promote to Tier 1/0 after supervised successful executions. Sandbox testing via bubblewrap, version-controlled with rollback.
+- Context Assembly Pipeline: prompts built in priority order (P1 system → P2 request → P3 tools → P4 auto-injected memories → P5 rolling summary → P6 recent turns → P7 older history). On 4K local NPU: ~200+150+150+200+150+400 = ~1,250 tok overhead, leaving ~2,750 for generation. Cloud providers skip summary, include full history.
+- Rolling conversation summary: generated during TTS playback (NPU idle), ~100 tokens, updated every 3 exchanges. Hides latency. Abandoned if user interrupts — fallback to raw recent turns. Not required for correctness.
+- Memory extraction: post-session LLM call extracts atomic facts + events from conversation summary → embeds on CPU → stores in sqlite-vec. Dedup via cosine similarity > 0.85. Also: regex-based in-conversation capture for explicit "remember..." requests.
+- Embedding model: all-MiniLM-L6-v2 via ONNX Runtime on CPU (~22MB, 384-dim, ~10-20ms/embed). sqlite-vec brute-force KNN sufficient for <50K entries. NPU reserved for LLM/ASR/TTS.
 
 ## Open Questions (to resolve during Phase 0)
 1. ~~Can SenseVoice + Qwen3-1.7B + Kokoro + SmolVLM2 all co-reside in 8GB NPU CMM?~~ Resolved: budget is ~4.75GB, fits with ~2.3GB headroom.
@@ -148,13 +153,13 @@ Cortex/
 - **Session 4 (2026-02-27):** Continued from Session 3. Added MCP protocol support — client discovers external tools, server exposes Cortex tools (DD-019). Added tiered VLM vision — SmolVLM2-500M always resident, hot-swap to larger VLMs, three image sources (DD-020). Redesigned interaction model to button-first — physical Pi uses Whisplay button (GPIO 11) with gesture recognition (hold=talk, double-click=camera, single-click=approve, long-press=deny, triple-click=menu), no VAD on Pi. Established Web UI parity principle: every physical capability has a software equivalent (DD-021). Updated scope doc to v0.1.6.
 - **Session 5 (2026-02-27):** Added configurable model provider layer (DD-022). All model interactions (LLM, ASR, TTS, VLM) routed through provider-agnostic Protocol interfaces with 7 backend types (axcl, openai, anthropic, google, xai, ollama, openai_compatible). Per-profile provider chains with fallback and circuit breaker. Tool calling format auto-adapted per provider. Security layer updated for cloud provider network gating and data privacy controls. Default: fully offline (axcl only), cloud/remote opt-in. Updated scope doc to v0.1.7.
 - **Session 6 (2026-02-27):** Five design corrections: (1) Camera service changed from USB/V4L2 to CSI/libcamera/picamera2 (DD-024). (2) SenseVoice ASR rationale documented — 10-20x faster than Whisper on NPU due to non-autoregressive architecture (DD-023). (3) Wake word removed entirely — unnecessary with button-first and no VAD (DD-025). (4) Context management simplified to provider-managed — no centralized budget scaling (DD-026). (5) Tool development pipeline added to Agent Factory — Specify→Develop→Review→Approve→Deploy lifecycle with promotion system (DD-027). Fixed stale Phase 1 (VAD→button, MeloTTS→Kokoro) and Phase 4 (wake word→tool pipeline) references. Updated scope doc to v0.1.8.
+- **Session 7 (2026-02-27):** Designed complete conversation context and memory system (DD-028). Context Assembly Pipeline builds prompts in priority order with 7 tiers. Rolling conversation summary generated during TTS playback for 4K NPU coherence. Five memory tiers detailed: working (RAM), short-term (SQLite conversation summaries), long-term (sqlite-vec atomic facts with embeddings), episodic (events/outcomes), tool (filesystem). Post-session LLM-based extraction captures facts/events. Automatic semantic retrieval (~20-40ms, CPU-only embedding via all-MiniLM-L6-v2) injects relevant memories into every prompt. Cloud provider privacy: memories stripped unless allow_sensitive_data enabled. Updated scope doc to v0.1.9.
 
 ### NEXT SESSION — Resume Here
 **Topic:** TBD — discuss with user. Possible next topics:
 - **Phase 0 hardware setup:** Begin actual hardware assembly and driver validation on the Pi 5
 - **Detailed action template design:** Flesh out the built-in action templates for Phase 2
 - **Security layer deep-dive:** Ensure §4.5 security architecture aligns with action engine and tool pipeline
-- **Memory system design:** Detail the embedding model choice and RAG patterns for 1.7B context
 - **Display UI deep-dive:** Detail the LCD render pipeline, display state machine, and status screen layouts
 - **Super agent YAML definitions:** Draft the initial agent config files for `config/agents/`
 

@@ -239,13 +239,26 @@ security:
     scratch_dir: /opt/cortex/data/sandbox
 
 memory:
+  working:
+    summary_interval: 3  # Generate rolling summary every N exchanges
+    summary_max_tokens: 100  # Max tokens for rolling summary generation
   short_term:
     max_conversations: 100
     retention_days: 30
   long_term:
     enabled: true
-    embedding_model: cpu  # cpu (small model) or npu
+    embedding_model: all-MiniLM-L6-v2  # ONNX model, runs on CPU (~22MB)
+    embedding_dimensions: 384
     max_entries: 10000
+    similarity_threshold: 0.3  # Minimum cosine similarity for auto-injection
+    dedup_threshold: 0.85  # Above this = duplicate (skip or supersede)
+    auto_inject_count: 3  # Memories to auto-inject per prompt (scaled by provider context)
+  episodic:
+    enabled: true
+    max_entries: 5000
+  extraction:
+    idle_timeout: 300  # Seconds of inactivity before post-session fact extraction
+    regex_patterns: true  # Catch "remember that...", "my name is..." immediately
   encryption:
     enabled: true
     algorithm: aes-256-gcm

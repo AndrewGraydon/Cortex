@@ -561,37 +561,173 @@ servers:
     enabled: false
 ```
 
-#### 4.4.9 Context Management
+#### 4.4.9 Context Assembly & Management
 
-Context management is **provider-managed** (see §4.3.3). The agent framework constructs the ideal prompt and the provider handles its own context limits.
+Context is **provider-managed** at the truncation level (see §4.3.3), but the agent framework controls **what goes into the prompt** via the Context Assembler. This is critical for the 4K local NPU, where only 2-3 raw turns fit — memories and summaries bridge the gap.
+
+**Context Assembly Pipeline:**
+
+```
+User speaks → ASR → text
+                ↓
+┌────────────────────────────────┐
+│      Context Assembler         │
+├────────────────────────────────┤
+│  P1: System prompt (required)  │  ← versioned template
+│  P2: Current request (required)│  ← user's message
+│  P3: Tool descriptions         │  ← pre-cached, agent-specific
+│  P4: Retrieved memories        │  ← auto-injected from long-term memory
+│  P5: Conversation summary      │  ← rolling summary of earlier turns
+│  P6: Recent turns              │  ← last 1-2 full exchanges
+│  P7: Older history             │  ← as many as fit
+└────────────┬───────────────────┘
+             ↓
+     Provider.complete()
+             ↓
+     Response → TTS → Speaker
+             ↓
+     Update working memory
+```
+
+Components are assembled in priority order (P1 highest). Higher-priority items are never dropped; lower-priority items are included if space permits. The provider truncates from P7 upward as a safety net.
+
+**Token budget by provider class:**
+
+| Component | 4K local NPU | 32K+ remote | 128K+ cloud |
+|---|---|---|---|
+| System prompt | ~200 | ~200 | ~200 |
+| Current request | ~50-200 | ~50-200 | ~50-200 |
+| Tool descriptions | ~150 | ~150 | ~300 (richer) |
+| Retrieved memories | ~100-200 (2-3 facts) | ~200-400 (4-6 facts) | ~400-800 (8-12 facts) |
+| Conversation summary | ~100-150 | (not needed) | (not needed) |
+| Recent turns | ~200-400 (1-2 turns) | ~2,000-4,000 | Full history |
+| Older history | (dropped) | ~4,000-8,000 | Full history |
+| **Generation budget** | **~2,700-3,200** | **~16,000-24,000** | **Remainder** |
+
+**Automatic memory injection (P4):** Before each LLM call, the Context Assembler embeds the user's current message on CPU (~10-20ms) and queries sqlite-vec for the top-K nearest facts from long-term memory. Results are injected as a `[Memory]` block in the system prompt. No LLM call required — total latency ~20-40ms.
 
 **Prompt construction per agent type:**
 
-| Agent Type | System Prompt | Tool Descs | History | Generation |
-|---|---|---|---|---|
-| Orchestrator | Classifier instructions (~150 tok) | Agent descriptions (~150-240 tok) | Current request only | Agent name (~20 tok) |
-| Super Agent | Domain instructions (~200 tok) | 2-3 cognitive tools (~150 tok) | Full conversation (provider truncates if needed) | Multi-turn reasoning |
-| Utility Agent | None | None | None | None (deterministic) |
+| Agent Type | System Prompt | Tool Descs | Memories | History | Generation |
+|---|---|---|---|---|---|
+| Orchestrator | Classifier (~150 tok) | Agent list (~150-240 tok) | None | Current request only | Agent name (~20 tok) |
+| Super Agent | Domain (~200 tok) | 2-3 tools (~150 tok) | Auto-injected (P4) | Summary + recent (P5-P7) | Multi-turn reasoning |
+| Utility Agent | None | None | None | None | None (deterministic) |
 
-- The agent framework always passes the **full ideal prompt** to the provider
-- The provider truncates from oldest history first if context is exceeded, preserving system prompt and current request
-- Local NPU (4K effective) naturally limits to 2-3 history turns; cloud providers (128K+) retain full conversation
-- Tool descriptions: pre-computed and cached, always included in full
-- Orchestrator passes only the relevant user request to the selected agent, not the full orchestrator context
+- Orchestrator does NOT get memory injection (it only classifies the request — no personalization needed)
+- Super agents get full context assembly: memories + summary + recent turns
+- Cloud providers (>32K context): summary is skipped, full history included instead
 
 #### 4.4.10 Memory System
 
+Five memory tiers, from volatile to permanent:
+
 | Type | Storage | Purpose | Retention |
 |---|---|---|---|
-| **Working Memory** | RAM | Current conversation context | Session |
-| **Short-term Memory** | SQLite | Recent conversations, task results | 30 days (configurable) |
-| **Long-term Memory** | SQLite + embeddings | Key facts, user preferences, learned patterns | Persistent |
-| **Episodic Memory** | SQLite | Significant events, decisions, outcomes | Persistent |
+| **Working Memory** | RAM | Current conversation + rolling summary | Session |
+| **Short-term Memory** | SQLite | Completed conversation summaries | 30 days (configurable) |
+| **Long-term Memory** | SQLite + sqlite-vec | Atomic facts, user preferences, learned patterns | Persistent |
+| **Episodic Memory** | SQLite + sqlite-vec | Significant events, decisions, outcomes | Persistent |
 | **Tool Memory** | Filesystem | Generated tools, agent configs, action templates | Persistent |
 
-- All memory encrypted at rest (see §4.5).
-- Embedding-based retrieval for long-term memory (small embedding model on NPU or CPU).
-- User can inspect, edit, and delete any memory via web UI.
+All memory encrypted at rest (see §4.5). User can inspect, edit, and delete any memory via web UI.
+
+**Working Memory** (RAM, session-scoped):
+- Full conversation message log (all turns, regardless of what fits in context window)
+- Rolling conversation summary (compact text, ~100-150 tokens)
+- Active task state (current agent, pending actions)
+
+**Rolling summary mechanism:**
+- **Trigger:** After every 3 completed exchanges, or when history exceeds 6 turns.
+- **Method:** Context Assembler calls the primary LLM: "Summarize this conversation in 2-3 sentences: [current summary] + [new turns]". Max generation: 100 tokens. Total call: ~640 tokens — fits easily in 4K.
+- **Scheduling:** Runs **during TTS playback** — while the speaker plays the response audio, the NPU is idle. Hides latency entirely. If the user interrupts before completion, the summary is abandoned and retried after the next response.
+- **Fallback:** If summary fails, the system includes only the most recent raw turns (no summary). Functional but less coherent — summary is an optimization, not a requirement.
+- **Cloud providers:** Summary is still generated (stored at session end) but full history is preferred in the prompt.
+
+**Short-term Memory** (SQLite, 30 days):
+- Stores completed conversation summaries and metadata:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `id` | UUID | Primary key |
+| `started_at` / `ended_at` | datetime | Conversation time span |
+| `summary` | text | Final rolling summary from working memory |
+| `turn_count` | int | Number of exchanges |
+| `topics` | text[] | Keyword-extracted topic tags (no LLM cost) |
+| `transcript` | text (encrypted) | Full transcript — for user review only, never injected into prompts |
+
+- Summary is the primary stored artifact — token-efficient, searchable, injectable.
+- Retention: configurable (default 30 days, max 100 conversations).
+
+**Long-term Memory** (SQLite + sqlite-vec, persistent):
+- Stores atomic facts and preferences with vector embeddings for semantic retrieval:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `id` | UUID | Primary key |
+| `content` | text | The fact (e.g., "User prefers 22°C for thermostat") |
+| `category` | enum | `fact`, `preference`, `person`, `place`, `routine` |
+| `embedding` | float[384] | Vector for semantic search |
+| `source_conversation` | UUID | Which conversation produced this |
+| `confidence` | float | 0.0-1.0, increases with repeated confirmation |
+| `created_at` / `last_referenced` | datetime | Timestamps |
+| `superseded_by` | UUID | Points to replacement if updated |
+
+- **Atomic:** Each entry is a single fact, not a paragraph. Examples: "User's name is Andrew", "Kitchen has Philips Hue lights".
+- **Mutable via superseding:** New fact replaces old (old retained for audit, excluded from search).
+- **Auto-injected:** Context Assembler retrieves relevant facts before each LLM call (P4 in assembly pipeline).
+- **Capacity:** 10,000 entries (configurable). When limit reached, least-referenced/lowest-confidence entries are pruning candidates (user prompted).
+
+**Episodic Memory** (SQLite + sqlite-vec, persistent):
+- Stores significant events and outcomes — narrative, not atomic:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `id` | UUID | Primary key |
+| `event` | text | What happened |
+| `outcome` | text | What resulted |
+| `significance` | enum | `routine`, `notable`, `milestone` |
+| `created_at` | datetime | When the event occurred |
+| `embedding` | float[384] | Vector for semantic search |
+
+- **Long-term = what IS true** (facts, preferences) → auto-injected, frequently referenced.
+- **Episodic = what HAPPENED** (events, decisions) → retrieved on-demand via `memory_query` cognitive tool, NOT auto-injected.
+
+**Memory Extraction** (post-session, LLM-based):
+
+After a conversation ends (idle timeout, configurable — default 5 minutes):
+1. System calls the primary LLM with conversation summary + last turns: "Extract key facts, preferences, and events as structured JSON."
+2. LLM returns: `{"facts": [...], "events": [...]}`
+3. Each fact is embedded on CPU (~10-20ms each), deduplicated against existing entries (cosine similarity > 0.85), and stored in long-term memory.
+4. Each event is embedded and stored in episodic memory.
+5. Conversation summary stored in short-term memory.
+
+**NPU scheduling:** Extraction runs after the conversation ends — NPU is idle, no contention.
+
+**In-conversation pattern extraction:** Simple regex patterns catch explicit requests ("remember that...", "my name is...", "I prefer...") and create long-term entries immediately. Zero LLM cost.
+
+**Memory Retrieval** (automatic + explicit):
+
+*Automatic injection (every LLM call):*
+1. Embed user's message on CPU (~10-20ms)
+2. Query sqlite-vec for top-K nearest long-term memories (K=3 for 4K, K=6 for 32K+, K=12 for 128K+)
+3. Filter: exclude superseded, apply similarity threshold (0.3)
+4. Format as `[Memory]` block in system prompt
+
+*Explicit retrieval (via `memory_query` tool):*
+- Agent calls `memory_query(query, types)` to search across ALL memory types
+- Returns up to 10 results including episodic memories
+- Used when an agent needs to recall specific past events
+
+**Embedding Model:**
+- `all-MiniLM-L6-v2` via ONNX Runtime on CPU
+- 22MB model, 384-dim embeddings, ~10-20ms per embedding on Pi 5
+- CPU-only — NPU reserved for LLM/ASR/TTS
+- sqlite-vec brute-force KNN is fast enough for up to 50K entries at this scale
+
+**Cloud Provider Privacy:**
+- When `allow_sensitive_data: false` (default for cloud providers): the `[Memory]` block and conversation summary are stripped from prompts before sending. Only system prompt, tools, recent turns, and current request are sent.
+- When `allow_sensitive_data: true`: full context including memories is sent. User explicitly opted in.
 
 ---
 
@@ -835,7 +971,8 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 | Tool Protocol | MCP (Python `mcp` SDK) | Standard tool interop; client (consume HA, n8n, etc.) + server (expose Cortex tools) |
 | Web Framework | FastAPI + Uvicorn | Async, streaming support |
 | Web Frontend | HTMX + Alpine.js | Minimal JS, server-driven |
-| Database | SQLite + sqlite-vec | Lightweight, vector search |
+| Embeddings | all-MiniLM-L6-v2 (ONNX on CPU) | 22MB, 384-dim, ~10-20ms/embed; semantic search for memory retrieval |
+| Database | SQLite + sqlite-vec | Lightweight, vector search (brute-force KNN, sufficient for <50K entries) |
 | Message Bus | ZeroMQ | Fast IPC, no broker |
 | Sandboxing | bubblewrap | Lightweight namespace isolation |
 | Firewall | nftables | Modern, kernel-level |
@@ -965,6 +1102,7 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 | DD-025 | No wake word — button-only activation | 2026-02-27 | With button-first interaction (DD-021) and no VAD, wake word serves no purpose. Removed entirely rather than deferred. Simplifies system — no always-on mic, no background audio processing, no power drain from continuous listening. |
 | DD-026 | Provider-managed context — no central Context Manager | 2026-02-27 | Each provider knows its own context window limits. The agent framework passes full conversation to the provider; the provider handles truncation if needed. Eliminates artificial token budget scaling that was over-engineering for the multi-provider design (DD-022). Local NPU still effectively limited by 4K practical window; cloud providers use their natural capacity. |
 | DD-027 | Tool Development Pipeline | 2026-02-27 | Structured lifecycle for tool creation: Specify (requirements YAML) → Develop (LLM-generated or human-written code) → Review (static analysis, sandbox test, security scan) → Approve (Tier 3 human approval) → Deploy (registered in tool registry). Tools remain in "draft" state until approved. Unapproved tools can be tested in sandbox but cannot affect real systems. |
+| DD-028 | Conversation context assembly and memory system | 2026-02-27 | Context Assembler builds prompts in priority order: system prompt → current request → tools → auto-injected memories → rolling summary → recent turns → older history. Rolling summary (generated during TTS playback, hidden latency) maintains coherence on 4K local NPU. Five memory tiers: working (RAM, session), short-term (SQLite, conversation summaries), long-term (SQLite + sqlite-vec, atomic facts with embeddings), episodic (events), tool (filesystem). Post-session LLM extraction captures facts/events. Automatic semantic retrieval injects relevant memories into every prompt (~20-40ms, CPU-only embedding via all-MiniLM-L6-v2). Cloud providers get full history + memories; local NPU gets summary + recent turns + memories. Memory stripped from cloud calls unless `allow_sensitive_data` enabled. |
 
-*Document version: 0.1.8 — Camera CSI, SenseVoice rationale, no wake word, provider-managed context, tool dev pipeline*
+*Document version: 0.1.9 — Context assembly pipeline, memory system detailed design*
 *Status: DRAFT*
