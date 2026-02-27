@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-02-27 (Session 2)
+# Last updated: 2026-02-27 (Session 4)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -58,13 +58,22 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-011 | Kokoro-82M as TTS engine | 2x faster than MeloTTS on NPU, #1 TTS Arena quality, 237MB NPU, already proven on LLM-8850 |
 | DD-012 | Adapt whisplay-ai-chatbot for LCD | Proven Pillow+cairosvg renderer on this hardware; 30 FPS, SVG emoji, smooth scrolling |
 | DD-013 | Defer web UI framework to Phase 3 | Voice-first; evaluate HTMX+DaisyUI vs NiceGUI vs Svelte later |
+| DD-014 | Custom Python action engine | Zero RAM, in-process, YAML templates + Python handlers; n8n/Node-RED/Temporal too heavy |
+| DD-015 | 3-tier agent hierarchy | Orchestrator (~370 tok) → Super Agents (4K context) → Utility Agents (0 LLM tokens) |
+| DD-016 | Unconstrained thinking, constrained acting | Free reasoning with cognitive tools; actions through pre-authorized templates |
+| DD-017 | Qwen-Agent as library only | NousFnCallPrompt for Qwen3-native tool-call parsing |
+| DD-018 | Custom framework over CrewAI/LangGraph/AutoGen | All too heavy/bloated for Pi 5 + 1.7B model constraints |
+| DD-019 | MCP protocol support (client + server) | Standard tool interop; external tools mapped to cognitive tools or action templates with permission gating |
+| DD-020 | Tiered VLM vision system | SmolVLM2-500M always resident; hot-swap to InternVL3-1B/Qwen2.5-VL-3B for detail; camera + webcam + upload |
+| DD-021 | Button-first interaction with Web UI parity | Physical Pi uses Whisplay button (GPIO 11) as sole input via gestures (hold/double-click/single-click/long-press/triple-click); no VAD on Pi; Web UI has full parity via software equivalents |
+| DD-022 | Configurable model provider layer | All model interactions via provider-agnostic Protocol interfaces; 7 providers (axcl, openai, anthropic, google, xai, ollama, openai_compatible); per-profile provider chains with fallback; tool calling auto-adapted; context budgets scale with provider; default offline, cloud opt-in |
 
 ## Architecture
 Seven-layer stack:
-1. HAL (NPU, Audio, Display, Power services)
-2. Voice Pipeline (Wake → VAD → ASR → LLM → TTS → Speaker)
-3. Reasoning Core (Qwen3-1.7B, model router, prompt management)
-4. Agent Framework (planner, tool registry, agent factory, memory)
+1. HAL (NPU, Audio, Display, Power, Camera services)
+2. Voice Pipeline (Button/Wake → ASR → LLM → TTS → Speaker)
+3. Reasoning Core (Model Provider Layer → Model Router → Prompt Management)
+4. Agent Framework (3-tier: Orchestrator → Super Agents → Utility Agents, Action Engine, memory)
 5. Security (4-tier permissions, bubblewrap sandbox, audit log, crypto)
 6. Web UI (FastAPI + HTMX chat, dashboard, tool/agent management)
 7. Display UI (Whisplay LCD states, button mapping, LED status)
@@ -79,7 +88,7 @@ Seven-layer stack:
 - **Phase 6** — Hardening and polish
 
 ## Key Technical Findings
-- Qwen3 has native Hermes-style tool calling; Qwen-Agent recommended for agentic use
+- Qwen3 has native Hermes-style tool calling; Qwen-Agent NousFnCallPrompt used for parsing
 - AXCL driver installs via M5Stack apt repo; Python + C APIs available
 - sherpa-onnx has AXCL backend for ASR (SenseVoice proven on this hardware)
 - PiSugar 3 Plus connects via pogo pins (back), does NOT occupy GPIO
@@ -88,14 +97,24 @@ Seven-layer stack:
 - Model loading on NPU uses CMM (compute memory), separate from system memory
 - Kokoro-82M TTS: RTF 0.067 on AX8850 (15x real-time), 237MB CMM, hybrid pipeline (3 axmodel NPU + ONNX vocoder CPU)
 - Kokoro proven on LLM-8850: see https://github.com/AndrewGraydon/kokoro.LM8850
-- Revised NPU memory budget: SenseVoice (~500MB) + Qwen3-1.7B (~3.5GB) + Kokoro (~237MB) = ~4.25GB (fits with ~3.5GB headroom)
+- Revised NPU memory budget: SenseVoice (~500MB) + Qwen3-1.7B (~3.5GB) + Kokoro (~237MB) + SmolVLM2-500M (~500MB) = ~4.75GB (fits with ~2.3GB headroom)
 - whisplay-ai-chatbot LCD architecture: TypeScript brain + Python display over TCP socket; Pillow + cairosvg rendering at 30 FPS; SPI at 100MHz; SVG emoji, LANCZOS resampling, line caching
 - Cortex will adapt this approach, replacing TCP socket IPC with ZeroMQ to match the rest of the stack
+- CAAL (CoreWorxLab) is a single-agent voice pipeline, not a multi-agent framework — but the concept of separating reasoning from action execution via pre-defined workflows is sound
+- Agent framework research (8 frameworks evaluated): CrewAI (32GB RAM, ChromaDB dep), AutoGen (conversation paradigm fills 4K in 2-3 turns), LangGraph (closest match but langchain-core bloat), smolagents (prompt bloat), Swarm (deprecated), Qwen-Agent (best for tool-call parsing only), ReAct (reasoning overhead for 1.7B)
+- Workflow engine research (8 engines): n8n (200-860MB), Node-RED (40-80MB+leaks), Temporal (2-4GB), Prefect (500MB+), Windmill (no ARM64), Dagu (Go binary), pypyr (right pattern). All external engines too heavy for Pi — custom in-process Python action engine selected
+- Token budgets for 4K context: Orchestrator ~370 tokens (single classifier call), Super Agent ~4000 tokens (200 system + 150 tools + 3600 working), Utility Agent 0 tokens (deterministic)
+- MCP (Model Context Protocol) supported via Python `mcp` SDK: client mode discovers tools from external servers (HA, n8n), server mode exposes Cortex tools to external AI clients; Streamable HTTP transport on existing FastAPI server
+- Tiered VLM vision: SmolVLM2-500M always resident (~500MB, total NPU ~4.75GB); hot-swap to InternVL3-1B or Qwen2.5-VL-3B for detailed analysis (unloads LLM temporarily, voice pipeline pauses). Three image sources: USB camera (physical Pi), webcam (web UI), file upload (web UI)
+- Whisplay HAT button hardware: single button on GPIO 11 (active low), 50ms debounce. RGB LEDs on GPIO 22/18/16. Same physical design as whisplay-ai-chatbot.
+- Button-first interaction: hold=push-to-talk (record while held, ASR on release), double-click=camera capture+VLM, single-click=approve/confirm, long-press=deny/cancel, triple-click=system menu. No VAD anywhere — both Pi and Web UI use explicit button control for recording boundaries.
+- Web UI parity: every physical Pi capability has a software equivalent — record button (hold-to-talk or click-start/click-stop), webcam/upload for vision, approve/deny buttons for Tier 2/3, status indicator for LED state.
+- Model Provider Layer: provider-agnostic Protocol interfaces for LLM, ASR, TTS, VLM. Seven providers: axcl (local NPU), openai, anthropic, google, xai, ollama, openai_compatible. Per-profile provider chains with fallback and circuit breaker. Tool calling format auto-adapted per provider (NousFnCallPrompt for Qwen3, OpenAI function calling for cloud, etc.). Context budgets scale dynamically based on provider context window (4K local → 16K+ cloud). API keys in .env, cloud calls gated by security layer with auto nftables management. Default: fully offline (axcl only).
 
 ## Open Questions (to resolve during Phase 0)
-1. Can SenseVoice + Qwen3-1.7B + MeloTTS all co-reside in 8GB NPU CMM?
+1. ~~Can SenseVoice + Qwen3-1.7B + MeloTTS all co-reside in 8GB NPU CMM?~~ Resolved: budget is ~4.75GB, fits with ~2.3GB headroom.
 2. NPU model hot-swap latency?
-3. Wake word engine choice (Porcupine vs OpenWakeWord)?
+3. Wake word engine choice (Porcupine vs OpenWakeWord)? — deferred to Phase 4 (button-first is default)
 4. Need USB SSD for extended storage?
 5. Enclosure design?
 
@@ -118,16 +137,17 @@ Cortex/
 ## Conversation History Summary
 - **Session 1 (2026-02-27):** Defined full project scope, hardware validation, 7-layer architecture, 4-tier security model, 6-phase implementation plan. Created scope document v0.1 and Phase 0 hardware setup guide. Decided on Python, local-first networking, tiered autonomy, general-purpose focus.
 - **Session 2 (2026-02-27):** Created private GitHub repo (AndrewGraydon/Cortex). Evaluated MeloTTS vs Kokoro-82M for TTS — selected Kokoro (DD-011). Evaluated LCD display approaches — adapting whisplay-ai-chatbot Pillow+cairosvg renderer (DD-012). Deferred web UI framework choice to Phase 3 (DD-013). Revised NPU memory budget from ~4.8GB to ~4.25GB.
+- **Session 3 (2026-02-27):** Refined agent architecture (Layer 4). Researched CAAL (single-agent, not multi-agent as expected), 8 agent frameworks (Qwen-Agent, smolagents, Swarm, ReAct, CrewAI, LangGraph, AutoGen), and 8 workflow engines (n8n, Node-RED, Temporal, Prefect, Windmill, Dagu, pypyr, custom). Designed 3-tier agent hierarchy: Orchestrator (classifier) → Super Agents (reasoning with cognitive tools) → Utility Agents (zero-LLM deterministic dispatch). Core principle: "unconstrained thinking, constrained acting." Custom Python action engine replaces n8n. Qwen-Agent used as library only for NousFnCallPrompt. Updated scope doc to v0.1.3 (DD-014 through DD-018).
+- **Session 4 (2026-02-27):** Continued from Session 3. Added MCP protocol support — client discovers external tools, server exposes Cortex tools (DD-019). Added tiered VLM vision — SmolVLM2-500M always resident, hot-swap to larger VLMs, three image sources (DD-020). Redesigned interaction model to button-first — physical Pi uses Whisplay button (GPIO 11) with gesture recognition (hold=talk, double-click=camera, single-click=approve, long-press=deny, triple-click=menu), no VAD on Pi. Established Web UI parity principle: every physical capability has a software equivalent (DD-021). Updated scope doc to v0.1.6.
+- **Session 5 (2026-02-27):** Added configurable model provider layer (DD-022). All model interactions (LLM, ASR, TTS, VLM) routed through provider-agnostic Protocol interfaces with 7 backend types (axcl, openai, anthropic, google, xai, ollama, openai_compatible). Per-profile provider chains with fallback and circuit breaker. Tool calling format auto-adapted per provider. Context budgets scale with provider context window. Security layer updated for cloud provider network gating and data privacy controls. Default: fully offline (axcl only), cloud/remote opt-in. Updated scope doc to v0.1.7.
 
 ### NEXT SESSION — Resume Here
-**Topic:** Refine the agent architecture (Layer 4 in scope doc).
-**Request:** Move from flat agent model to a 3-tier hierarchy:
-- **Cortex (Orchestrator)** — top-level coordinator, routes tasks, creates super agents as needed
-- **Super Agents** — handle complex multi-step tasks with planning, can be created dynamically
-- **Utility Agents** — use predefined tools only, no code generation
-**Reference project:** https://github.com/CoreWorxLab/CAAL (Agentic Abstraction Layer — orchestrator/super agent/utility agent pattern)
-**Key constraint:** Must work with Qwen3-1.7B (~15 tok/s, 4K practical context). Utility agents should be tool-dispatch only (no code gen). Super agents get planning capability. Research CAAL, Qwen-Agent, smolagents, Swarm, and ReAct patterns for suitability.
-**Action:** Research CAAL and agent architecture patterns, then propose a revised Layer 4 spec for the scope doc.
+**Topic:** TBD — discuss with user. Possible next topics:
+- **Phase 0 hardware setup:** Begin actual hardware assembly and driver validation on the Pi 5
+- **Detailed action template design:** Flesh out the built-in action templates for Phase 2
+- **Security layer integration:** Ensure §4.5 security architecture aligns with the new action engine
+- **Memory system design:** Detail the embedding model choice and RAG patterns for 1.7B context
+- **Display UI deep-dive:** Detail the LCD render pipeline, display state machine, and status screen layouts
 
 ---
 

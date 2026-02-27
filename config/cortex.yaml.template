@@ -23,6 +23,12 @@ hal:
     brightness: 80  # 0-100
     idle_timeout: 30  # seconds before dimming
     orientation: 0  # 0, 90, 180, 270
+  camera:
+    enabled: false  # Enable when USB camera attached
+    device: /dev/video0
+    resolution: [640, 480]  # Width x height for VLM input
+    format: jpeg
+    quality: 85  # JPEG quality (0-100)
   power:
     pisugar_socket: /tmp/pisugar-server.sock
     low_battery_threshold: 15  # %
@@ -30,46 +36,190 @@ hal:
     sleep_on_battery_idle: 300  # seconds
 
 voice:
-  activation_mode: push_to_talk  # push_to_talk, wake_word, always_on
-  wake_word: cortex
-  vad:
-    engine: silero
-    threshold: 0.5
-    min_speech_duration: 0.25  # seconds
-    max_speech_duration: 30  # seconds
-    silence_timeout: 1.5  # seconds after speech ends
+  activation_mode: button  # button (default — both Pi and Web UI), wake_word (Phase 4)
+  wake_word: cortex  # Used only when activation_mode: wake_word (Phase 4)
+  # No VAD — both physical Pi and Web UI use explicit button control for recording.
+  # Pi: hardware button (GPIO 11) hold-to-talk.
+  # Web UI: software record button (hold-to-talk or click-start/click-stop).
+  max_recording_duration: 30  # seconds — safety limit for recording length
   asr:
-    model: sensevoice  # sensevoice, whisper
-    language: en
+    # Provider chain — tries in order. Default: local NPU only.
+    providers: [axcl]
+    axcl: { model: sensevoice, language: en }
+    # openai: { model: whisper-1 }  # Uncomment to enable OpenAI Whisper API fallback
+    # google: { model: latest_long }  # Uncomment for Google Cloud STT
   tts:
-    model: kokoro  # kokoro, cosyvoice2
-    voice: af_heart  # Kokoro voice ID (e.g., af_heart, am_adam, bf_emma)
-    speed: 1.0
-    sample_rate: 24000  # Kokoro native output rate
-    max_chunk_tokens: 96  # axmodel constraint — sentences split at this limit
+    # Provider chain — tries in order. Default: local NPU only.
+    providers: [axcl]
+    axcl:
+      model: kokoro
+      voice: af_heart  # Kokoro voice ID (e.g., af_heart, am_adam, bf_emma)
+      speed: 1.0
+      sample_rate: 24000  # Kokoro native output rate
+      max_chunk_tokens: 96  # axmodel constraint — sentences split at this limit
+    # openai: { model: tts-1, voice: nova }  # Uncomment for OpenAI TTS fallback
+    # google: { model: en-US-Neural2-F }  # Uncomment for Google Cloud TTS
   latency_budget:
     asr_max_ms: 500
     tts_first_audio_ms: 200
 
+button:
+  # Whisplay HAT single button (GPIO 11, active low)
+  gpio_pin: 11
+  debounce_ms: 50
+  gestures:
+    hold:
+      min_duration_ms: 300  # Press > 300ms = push-to-talk
+      action: push_to_talk  # Record while held, ASR on release
+    double_click:
+      max_gap_ms: 400  # Two presses within 400ms
+      action: camera_capture  # Capture image → VLM analysis
+    single_click:
+      delay_ms: 400  # Wait 400ms to rule out double-click
+      action: confirm  # Approve pending action; repeat last response if idle
+    long_press:
+      min_duration_ms: 2000  # Press > 2s
+      action: cancel  # Deny pending action; interrupt current operation
+    triple_click:
+      max_gap_ms: 600  # Three presses within 600ms
+      action: system_menu  # Cycle status screens
+
+# --- Model Providers ---
+# Configure inference backends. Default: axcl (local NPU) only.
+# Enable additional providers to use cloud LLMs or remote servers.
+# API keys stored in .env file (gitignored), never here.
+providers:
+  axcl:
+    enabled: true  # Local NPU — always available when hardware present
+    device_id: 0
+
+  ollama:
+    enabled: false
+    base_url: "http://192.168.1.100:11434"  # Remote Ollama server
+    connect_timeout: 5  # seconds
+    # allow_sensitive_data: false  # Strip memory/personal data before sending
+
+  openai:
+    enabled: false
+    # API key: OPENAI_API_KEY in .env
+    default_model: gpt-4o-mini
+    connect_timeout: 10
+    # allow_sensitive_data: false
+
+  anthropic:
+    enabled: false
+    # API key: ANTHROPIC_API_KEY in .env
+    default_model: claude-sonnet-4-6
+    connect_timeout: 10
+    # allow_sensitive_data: false
+
+  google:
+    enabled: false
+    # API key: GOOGLE_AI_API_KEY in .env
+    default_model: gemini-2.0-flash
+    connect_timeout: 10
+    # allow_sensitive_data: false
+
+  xai:
+    enabled: false
+    # API key: XAI_API_KEY in .env
+    base_url: "https://api.x.ai/v1"
+    default_model: grok-3-mini
+    connect_timeout: 10
+    # allow_sensitive_data: false
+
+  openai_compatible:
+    enabled: false
+    base_url: ""  # Any OpenAI-compatible endpoint (vLLM, LiteLLM, TGI, etc.)
+    # Optional API key: CUSTOM_LLM_API_KEY in .env
+    default_model: ""
+    connect_timeout: 10
+    # allow_sensitive_data: false
+
+# --- Reasoning Core ---
+# Each profile specifies a provider chain (tried in order) with per-provider model config.
+# Default: all profiles route to axcl (local NPU) only.
 reasoning:
-  primary_model: qwen3-1.7b
-  fallback_model: qwen3-0.6b
-  default_mode: non_thinking  # thinking, non_thinking
-  max_tokens: 512
+  default_profile: chat
+  context_adaptation: true  # Scale agent token budgets based on provider context window
+  max_tokens: 512  # Default max generation tokens
   temperature: 0.7
-  context_window: 4096  # Effective context (subset of 32K for speed)
   system_prompt_version: v1
 
+  profiles:
+    chat:
+      providers: [axcl]
+      axcl: { model: qwen3-1.7b, mode: non_thinking }
+      # ollama: { model: qwen3:8b }  # Uncomment to add Ollama fallback
+      # openai: { model: gpt-4o-mini }
+    reason:
+      providers: [axcl]
+      axcl: { model: qwen3-1.7b, mode: thinking }
+      # anthropic: { model: claude-sonnet-4-6 }
+    code:
+      providers: [axcl]
+      axcl: { model: qwen3-1.7b, mode: thinking }
+    quick:
+      providers: [axcl]
+      axcl: { model: qwen3-0.6b, mode: non_thinking }
+    vision_quick:
+      providers: [axcl]
+      axcl: { model: smolvlm2-500m }
+      # openai: { model: gpt-4o }
+    vision_detail:
+      providers: [axcl]
+      axcl: { model: internvl3-1b }
+    vision_advanced:
+      providers: [axcl]
+      axcl: { model: qwen2.5-vl-3b }
+    fallback:
+      # Cloud-only profile — used when local models can't handle the task
+      providers: [openai, anthropic]
+      openai: { model: gpt-4o-mini }
+      anthropic: { model: claude-sonnet-4-6 }
+
+  fallback:
+    circuit_breaker_failures: 3  # Skip provider after N consecutive failures
+    circuit_breaker_reset_seconds: 60  # Re-enable after this cooldown
+
 agent:
-  max_plan_steps: 10
-  tool_timeout: 30  # seconds per tool execution
-  max_concurrent_tools: 1  # Pi CPU limitation
-  dynamic_tools:
-    enabled: true
+  orchestrator:
+    token_budget: 370  # Max tokens for classifier call
+    pattern_routing: true  # Try regex/keyword match before LLM call
+    fallback_agent: general  # When no confident match
+  super_agents:
+    config_dir: config/agents  # YAML agent definitions
+    max_llm_calls: 4  # Default per-task limit
+    base_context_window: 4096  # Base budget (scales up with larger provider context windows)
+    base_history_turns: 3  # Base sliding window (scales up with larger context)
+    default_model_profile: chat  # Profile from reasoning.profiles
+  utility_agents:
+    enabled: true  # Pure deterministic dispatch
+  action_engine:
+    templates_dir: config/actions  # YAML action templates
+    default_timeout: 30  # seconds per action execution
+    max_retries: 2
+    sandbox: bubblewrap  # For untrusted/dynamic handlers
+    sandbox_max_memory_mb: 256
+    sandbox_max_cpu_seconds: 30
+  cognitive_tools:
+    enabled: [memory_query, knowledge_search, system_info, file_read, calendar_query]
+    # web_search and device_state enabled when network/IoT configured
+  factory:
+    enabled: false  # Enable in Phase 4
+    require_approval: true  # Tier 3 approval for new agents/templates
     auto_persist: false  # Require user approval to save
-    sandbox: bubblewrap
-    max_memory_mb: 256
-    max_cpu_seconds: 30
+  # tool_call_format: auto-detected from active provider (see §4.3.2 Tool Calling Adaptation)
+  mcp:
+    client:
+      servers_config: config/mcp_servers.yaml  # External MCP server definitions
+      connect_timeout: 5  # seconds per server
+      default_permission_tier: 2  # For discovered external tools
+    server:
+      enabled: false  # Enable in Phase 3
+      # Exposed on FastAPI server (same host:port as web UI)
+      expose_cognitive_tools: true
+      expose_action_templates: true  # Respects permission tiers
 
 security:
   tier_0_auto: true
