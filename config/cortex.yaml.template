@@ -1,0 +1,122 @@
+# Project Cortex — Configuration Template
+# Copy to cortex.yaml and customize
+
+system:
+  hostname: cortex
+  log_level: INFO  # DEBUG, INFO, WARNING, ERROR
+  data_dir: /opt/cortex/data
+  timezone: UTC  # Set to your timezone
+
+hal:
+  npu:
+    device_id: 0
+    axcl_json: /etc/axcl.json
+    thermal_throttle_temp: 75  # °C
+    thermal_shutdown_temp: 85  # °C
+  audio:
+    card_name: wm8960sound  # From aplay -l
+    sample_rate: 16000
+    channels: 1
+    format: S16_LE
+    volume: 80  # 0-100
+  display:
+    brightness: 80  # 0-100
+    idle_timeout: 30  # seconds before dimming
+    orientation: 0  # 0, 90, 180, 270
+  power:
+    pisugar_socket: /tmp/pisugar-server.sock
+    low_battery_threshold: 15  # %
+    critical_battery_threshold: 5  # %
+    sleep_on_battery_idle: 300  # seconds
+
+voice:
+  activation_mode: push_to_talk  # push_to_talk, wake_word, always_on
+  wake_word: cortex
+  vad:
+    engine: silero
+    threshold: 0.5
+    min_speech_duration: 0.25  # seconds
+    max_speech_duration: 30  # seconds
+    silence_timeout: 1.5  # seconds after speech ends
+  asr:
+    model: sensevoice  # sensevoice, whisper
+    language: en
+  tts:
+    model: melotts  # melotts, cosyvoice2
+    voice: default
+    speed: 1.0
+  latency_budget:
+    asr_max_ms: 500
+    tts_first_audio_ms: 200
+
+reasoning:
+  primary_model: qwen3-1.7b
+  fallback_model: qwen3-0.6b
+  default_mode: non_thinking  # thinking, non_thinking
+  max_tokens: 512
+  temperature: 0.7
+  context_window: 4096  # Effective context (subset of 32K for speed)
+  system_prompt_version: v1
+
+agent:
+  max_plan_steps: 10
+  tool_timeout: 30  # seconds per tool execution
+  max_concurrent_tools: 1  # Pi CPU limitation
+  dynamic_tools:
+    enabled: true
+    auto_persist: false  # Require user approval to save
+    sandbox: bubblewrap
+    max_memory_mb: 256
+    max_cpu_seconds: 30
+
+security:
+  tier_0_auto: true
+  tier_1_log: true
+  tier_2_require_approval: true
+  tier_3_require_confirmation_and_reason: true
+  approval_timeout: 60  # seconds
+  default_deny_on_timeout: true
+  audit:
+    enabled: true
+    retention_days: 90
+    format: jsonl  # jsonl, sqlite
+  network:
+    default_policy: deny
+    allowed_domains: []  # Populated by user
+    local_network_access: true  # For IoT
+    tls_minimum: "1.3"
+  sandbox:
+    engine: bubblewrap  # bubblewrap, podman
+    scratch_dir: /opt/cortex/data/sandbox
+
+memory:
+  short_term:
+    max_conversations: 100
+    retention_days: 30
+  long_term:
+    enabled: true
+    embedding_model: cpu  # cpu (small model) or npu
+    max_entries: 10000
+  encryption:
+    enabled: true
+    algorithm: aes-256-gcm
+
+web:
+  host: "0.0.0.0"  # Will be restricted by nftables
+  port: 8080
+  auth:
+    enabled: true
+    # password_hash set via setup script
+  session_timeout: 3600  # seconds
+  cors_origins: []  # Restrict to specific origins if needed
+
+iot:
+  enabled: false  # Enable in Phase 5
+  mqtt:
+    broker: ""  # e.g., localhost or HA IP
+    port: 1883
+    username: ""
+    password: ""
+  homeassistant:
+    url: ""  # e.g., http://homeassistant.local:8123
+    token: ""  # Long-lived access token

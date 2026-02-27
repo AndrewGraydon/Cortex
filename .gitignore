@@ -1,0 +1,45 @@
+# Project Cortex .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Models (large binary files)
+models/
+
+# Runtime data
+data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.key
+*.pem
+config/secrets.yaml
+
+# Logs
+*.log
+logs/
+
+# Temporary
+tmp/
+temp/
