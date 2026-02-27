@@ -103,15 +103,20 @@ Record Button → Mic → ASR ──→ Intent/LLM ──→ TTS ──→ Brows
 
 This eliminates VAD entirely from the system — no Silero, no silence detection, no false activations, no always-on mic. The user is always in control of when audio is captured.
 
-**Model Allocation on NPU (8GB budget):**
+**Model Allocation on NPU (7,040 MiB CMM usable):**
 
-| Model | Purpose | Est. NPU Memory | Est. Performance |
-|---|---|---|---|
-| SenseVoice-Small | ASR (Speech-to-Text) | ~500MB | RTF 0.015 (67x real-time), ~50-75ms per utterance |
-| Qwen3-1.7B (w8a16) | Reasoning / conversation | ~3.5GB | ~12-15 tok/s |
-| Kokoro-82M (v1.0, axmodel) | TTS (Text-to-Speech) | ~237MB | RTF 0.067 (15x real-time) |
-| SmolVLM2-500M | Vision (always resident) | ~500MB | TBD (Phase 0 testing) |
-| **Total estimated (with VLM)** | | **~4.74GB** | Leaves ~2.3GB headroom |
+*Confirmed benchmarks from [AXERA-TECH](https://huggingface.co/AXERA-TECH) and [M5Stack docs](https://docs.m5stack.com/en/guide/ai_accelerator/llm-8850/m5_llm_8850_npu_benchmark):*
+
+| Model | Purpose | CMM Used | CMM Remaining | Performance (M.2 + Pi 5) |
+|---|---|---|---|---|
+| SenseVoice-Small | ASR (Speech-to-Text) | ~500MB | ~6,540 MB | RTF 0.015 (67x real-time), ~50-75ms per utterance |
+| Qwen3-0.6B (w8a16) | Quick commands / orchestrator | ~2.0 GB | ~5,068 MB | 12.88 tok/s |
+| **Qwen3-1.7B (w8a16)** | **Primary LLM (default)** | **~3.3 GB** | **~3,788 MB** | **7.38 tok/s** |
+| Kokoro-82M (v1.0, axmodel) | TTS (Text-to-Speech) | ~237MB | — | RTF 0.067 (15x real-time) |
+| SmolVLM2-500M | Vision (always resident) | ~500MB | — | TBD (Phase 0 testing) |
+| **Default co-resident set** | | **~4.5 GB** | **~2.5 GB** | All models loaded simultaneously |
+
+**Why not Qwen3-4B?** Evaluated — uses 6.2 GB CMM (691 MB remaining), only 3.65 tok/s, max 2,559 tokens. Cannot co-reside with ANY other model. Every voice interaction would require sequential model swaps (ASR→LLM→TTS). Not viable as primary. Available as hot-swap for heavy reasoning when Pulsar2 v4.2 releases. See DD-029.
 
 **Vision model hot-swap pool (loaded on demand, replaces Qwen3-1.7B temporarily):**
 
@@ -119,24 +124,30 @@ This eliminates VAD entirely from the system — no Silero, no silence detection
 |---|---|---|---|
 | InternVL3-1B | Detailed image analysis | ~1.5GB (est.) | Best quality; requires unloading LLM |
 | Qwen2.5-VL-3B-Instruct | Advanced multimodal reasoning | ~3GB (est.) | Largest; requires unloading LLM + possibly ASR |
+| Qwen3-VL-4B-GPTQ-Int4 | Combined LLM+VLM (future) | ~5.1 GB | INT4; replaces both LLM and VLM; needs Pulsar2 v4.2 |
+
+**Additional models available from [AXERA-TECH catalog](https://huggingface.co/AXERA-TECH) (148 models) — evaluate in Phase 0:**
+- DeepSeek-R1-Distill-Qwen-1.5B (alternative reasoning), InternVL3.5, FastVLM, MiniCPM4-V (newer VLMs)
+- Qwen3-Embedding-0.6B (potential NPU-accelerated embedding model for memory retrieval)
 
 **Activation Modes:**
 1. **Button push-to-talk (physical Pi, default)** — Whisplay button (GPIO 11) held down; audio captured while held, sent to ASR on release. Zero false activations.
 2. **Button push-to-talk (Web UI)** — Browser record button mirrors physical button: hold-to-talk or click-to-start/click-to-stop. User controls recording boundaries explicitly.
 3. **Text input (Web UI)** — Bypasses voice pipeline entirely.
 
-**Latency Budget (voice round-trip target: < 3 seconds):**
+**Latency Budget (voice round-trip, first audio target: < 3 seconds):**
 - ASR: < 500ms for typical utterance (button release triggers immediate ASR — no VAD delay on any interface)
-- LLM inference (50-token response @ 15 tok/s): ~3.3s
-- TTS synthesis: < 500ms (with streaming, first audio < 200ms)
-- **Stretch goal:** Stream TTS while LLM is still generating (sentence-level chunking via Kokoro's native generator pipeline).
+- LLM first token: ~1-2s (prefill)
+- LLM generation (50-token response @ 7.38 tok/s): ~6.8s total
+- TTS first audio: < 200ms after first sentence complete (streaming)
+- **Critical optimization:** Stream TTS while LLM is still generating (sentence-level chunking via Kokoro's native generator pipeline). First audio plays within ~3s of button release even though full generation takes longer.
 
 **NPU Memory Management Strategy:**
-- Models can be hot-swapped. ASR loads → runs → partially unloads during LLM inference.
-- Alternatively, keep all three resident if memory allows (~4.25GB fits in 8GB with ~3.5GB headroom).
+- Default: all four primary models co-resident (~4.5 GB of 7 GB, ~2.5 GB headroom).
 - Kokoro uses a hybrid pipeline: 3 axmodel parts on NPU + ONNX vocoder on CPU, reducing NPU memory pressure.
 - Monitor via NPU Service; degrade gracefully (e.g., smaller ASR model) if memory pressure detected.
 - **Vision hot-swap:** SmolVLM2-500M stays resident for quick image descriptions (~500MB). For detailed analysis, unload Qwen3-1.7B, load InternVL3-1B or Qwen2.5-VL-3B, process image, then swap back. Voice pipeline pauses during hot-swap.
+- **Heavy reasoning hot-swap (future):** Qwen3-4B or Qwen3-VL-4B can be loaded for complex tasks, but requires unloading all other models. Only viable when hot-swap latency is confirmed acceptable (Phase 0 testing).
 
 ---
 
@@ -1084,7 +1095,7 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 | DD-002 | Local-first with optional external access | 2026-02-27 | Privacy-first while maintaining flexibility |
 | DD-003 | Tiered autonomy (4-tier permissions) | 2026-02-27 | Safe actions auto, risky actions need approval |
 | DD-004 | General-purpose assistant focus | 2026-02-27 | Avoids premature domain-specific optimization |
-| DD-005 | Qwen3-1.7B as primary model | 2026-02-27 | Best balance of capability and NPU performance; native tool calling |
+| DD-005 | Qwen3-1.7B as primary model | 2026-02-27 | Confirmed: 7.38 tok/s, 3.3 GB CMM, 4K context on M.2 + Pi 5. Best balance of speed, memory, and capability. Qwen3-4B rejected (3.65 tok/s, 6.2 GB CMM, fills NPU, see DD-029). Native Hermes tool calling. |
 | DD-011 | Kokoro-82M as TTS engine (replacing MeloTTS) | 2026-02-27 | 2x faster on NPU (RTF 0.067 vs 0.125), #1 HuggingFace TTS Arena quality, 54 voices, 237MB NPU vs 800MB estimated for MeloTTS, actively maintained, already proven on LLM-8850 |
 | DD-012 | Adapt whisplay-ai-chatbot for LCD display | 2026-02-27 | Proven 30 FPS Pillow+cairosvg renderer on this exact hardware; SVG emoji, smooth scrolling, LED fading; adapt and extend rather than rewrite |
 | DD-013 | Defer web UI framework decision to Phase 3 | 2026-02-27 | Web UI is secondary to voice interface; evaluate HTMX+DaisyUI vs NiceGUI vs Svelte when implementation begins |
@@ -1103,6 +1114,7 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 | DD-026 | Provider-managed context — no central Context Manager | 2026-02-27 | Each provider knows its own context window limits. The agent framework passes full conversation to the provider; the provider handles truncation if needed. Eliminates artificial token budget scaling that was over-engineering for the multi-provider design (DD-022). Local NPU still effectively limited by 4K practical window; cloud providers use their natural capacity. |
 | DD-027 | Tool Development Pipeline | 2026-02-27 | Structured lifecycle for tool creation: Specify (requirements YAML) → Develop (LLM-generated or human-written code) → Review (static analysis, sandbox test, security scan) → Approve (Tier 3 human approval) → Deploy (registered in tool registry). Tools remain in "draft" state until approved. Unapproved tools can be tested in sandbox but cannot affect real systems. |
 | DD-028 | Conversation context assembly and memory system | 2026-02-27 | Context Assembler builds prompts in priority order: system prompt → current request → tools → auto-injected memories → rolling summary → recent turns → older history. Rolling summary (generated during TTS playback, hidden latency) maintains coherence on 4K local NPU. Five memory tiers: working (RAM, session), short-term (SQLite, conversation summaries), long-term (SQLite + sqlite-vec, atomic facts with embeddings), episodic (events), tool (filesystem). Post-session LLM extraction captures facts/events. Automatic semantic retrieval injects relevant memories into every prompt (~20-40ms, CPU-only embedding via all-MiniLM-L6-v2). Cloud providers get full history + memories; local NPU gets summary + recent turns + memories. Memory stripped from cloud calls unless `allow_sensitive_data` enabled. |
+| DD-029 | Qwen3-1.7B confirmed as primary LLM (4B rejected) | 2026-02-27 | Confirmed benchmarks on M.2 + Pi 5: Qwen3-1.7B uses 3.3 GB CMM at 7.38 tok/s (4K context). Qwen3-4B uses 6.2 GB CMM at 3.65 tok/s (2,559 max tokens) — only 691 MB remaining, cannot co-reside with ANY other model. Qwen3-4B is not viable as primary (half the speed, less context, requires serial model swapping for every ASR/TTS call). Qwen3-4B noted as future hot-swap option for heavy local reasoning (requires Pulsar2 v4.2, not yet released). AXERA-TECH catalog (148 models) provides additional options: Qwen3-VL-4B-GPTQ-Int4 as combined LLM+VLM hot-swap, DeepSeek-R1-Distill-Qwen-1.5B as alternative reasoning model. |
 
-*Document version: 0.1.9 — Context assembly pipeline, memory system detailed design*
+*Document version: 0.1.10 — Confirmed NPU benchmarks, Qwen3-4B evaluation, AXERA-TECH catalog*
 *Status: DRAFT*

@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-02-27 (Session 7)
+# Last updated: 2026-02-27 (Session 8)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -34,12 +34,13 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 - **Vision:** YOLO11, Depth-Anything-V2, Real-ESRGAN
 - **Other:** CLIP, 3D-Speaker-MT, LivePortrait, Stable Diffusion 1.5
 
-### NPU Performance (from benchmarks/reviews)
-- Qwen3-0.6B: ~12.88 tok/s (w8a16)
-- Qwen2.5-1.5B-Instruct: ~15.03 tok/s
-- Qwen3-1.7B: TBD (Phase 0 testing)
+### NPU Performance (confirmed benchmarks on M.2 + Pi 5)
+- Qwen3-0.6B (w8a16): 12.88 tok/s, ~2.0 GB CMM
+- Qwen3-1.7B (w8a16): **7.38 tok/s**, ~3.3 GB CMM, ~4K context
+- Qwen3-4B (w8a16): 3.65 tok/s, ~6.2 GB CMM (691 MB remaining — can't co-reside), max 2,559 tokens
+- Qwen3-VL-2B (w8a16): 7.80 tok/s, ~3.7 GB CMM
 - SenseVoice RTF: ~0.015 (67x faster than real-time)
-- User reports: ~20 tok/s for optimized smaller models
+- Source: [AXERA-TECH HuggingFace](https://huggingface.co/AXERA-TECH) (148 models total), [M5Stack NPU Benchmark](https://docs.m5stack.com/en/guide/ai_accelerator/llm-8850/m5_llm_8850_npu_benchmark)
 
 ## Design Decisions Made
 
@@ -49,7 +50,7 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-002 | Local-first with optional secure external | Privacy + flexibility |
 | DD-003 | 4-tier permission model | Tiered autonomy: safe=auto, risky=approval |
 | DD-004 | General-purpose assistant | No premature domain optimization |
-| DD-005 | Qwen3-1.7B primary model | Best capability/speed on this NPU; native Hermes tool calling |
+| DD-005 | Qwen3-1.7B primary model | Confirmed: 7.38 tok/s, 3.3 GB CMM, 4K context. Qwen3-4B rejected (3.65 tok/s, 6.2 GB fills NPU). See DD-029. |
 | DD-006 | FastAPI + HTMX for web UI | Lightweight, async, server-driven |
 | DD-007 | SQLite + sqlite-vec for memory | No separate DB server, vector search support |
 | DD-008 | ZeroMQ for IPC | Fast, brokerless, simple |
@@ -73,6 +74,7 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-026 | Provider-managed context | No centralized context budget scaling. Each provider knows its own limits; agent framework passes full ideal prompt, provider handles truncation. Simplifies architecture. |
 | DD-027 | Tool development pipeline | Structured lifecycle: Specify → Develop → Review → Approve → Deploy. Tools start at Tier 2, promote after supervised use. Sandbox testing, version control, rollback. |
 | DD-028 | Context assembly & memory system | Context Assembler builds prompts in priority order (system → request → tools → memories → summary → history). Rolling summary during TTS playback for 4K NPU coherence. 5 memory tiers with post-session LLM extraction. Automatic semantic retrieval (~20-40ms, CPU embedding) injects memories into prompts. all-MiniLM-L6-v2 + sqlite-vec. |
+| DD-029 | Qwen3-1.7B confirmed, 4B rejected | Confirmed benchmarks: 1.7B = 7.38 tok/s, 3.3 GB CMM. 4B = 3.65 tok/s, 6.2 GB (fills NPU, can't co-reside with anything). 4B as future hot-swap only. AXERA-TECH catalog (148 models) noted for Phase 0 evaluation. |
 
 ## Architecture
 Seven-layer stack:
@@ -103,7 +105,7 @@ Seven-layer stack:
 - Model loading on NPU uses CMM (compute memory), separate from system memory
 - Kokoro-82M TTS: RTF 0.067 on AX8850 (15x real-time), 237MB CMM, hybrid pipeline (3 axmodel NPU + ONNX vocoder CPU)
 - Kokoro proven on LLM-8850: see https://github.com/AndrewGraydon/kokoro.LM8850
-- Revised NPU memory budget: SenseVoice (~500MB) + Qwen3-1.7B (~3.5GB) + Kokoro (~237MB) + SmolVLM2-500M (~500MB) = ~4.75GB (fits with ~2.3GB headroom)
+- Confirmed NPU memory budget: SenseVoice (~500MB) + Qwen3-1.7B (~3.3GB) + Kokoro (~237MB) + SmolVLM2-500M (~500MB) = ~4.5GB of 7.0GB (fits with ~2.5GB headroom). Qwen3-4B rejected — 6.2GB fills NPU, can't co-reside with any other model.
 - whisplay-ai-chatbot LCD architecture: TypeScript brain + Python display over TCP socket; Pillow + cairosvg rendering at 30 FPS; SPI at 100MHz; SVG emoji, LANCZOS resampling, line caching
 - Cortex will adapt this approach, replacing TCP socket IPC with ZeroMQ to match the rest of the stack
 - CAAL (CoreWorxLab) is a single-agent voice pipeline, not a multi-agent framework — but the concept of separating reasoning from action execution via pre-defined workflows is sound
@@ -154,6 +156,7 @@ Cortex/
 - **Session 5 (2026-02-27):** Added configurable model provider layer (DD-022). All model interactions (LLM, ASR, TTS, VLM) routed through provider-agnostic Protocol interfaces with 7 backend types (axcl, openai, anthropic, google, xai, ollama, openai_compatible). Per-profile provider chains with fallback and circuit breaker. Tool calling format auto-adapted per provider. Security layer updated for cloud provider network gating and data privacy controls. Default: fully offline (axcl only), cloud/remote opt-in. Updated scope doc to v0.1.7.
 - **Session 6 (2026-02-27):** Five design corrections: (1) Camera service changed from USB/V4L2 to CSI/libcamera/picamera2 (DD-024). (2) SenseVoice ASR rationale documented — 10-20x faster than Whisper on NPU due to non-autoregressive architecture (DD-023). (3) Wake word removed entirely — unnecessary with button-first and no VAD (DD-025). (4) Context management simplified to provider-managed — no centralized budget scaling (DD-026). (5) Tool development pipeline added to Agent Factory — Specify→Develop→Review→Approve→Deploy lifecycle with promotion system (DD-027). Fixed stale Phase 1 (VAD→button, MeloTTS→Kokoro) and Phase 4 (wake word→tool pipeline) references. Updated scope doc to v0.1.8.
 - **Session 7 (2026-02-27):** Designed complete conversation context and memory system (DD-028). Context Assembly Pipeline builds prompts in priority order with 7 tiers. Rolling conversation summary generated during TTS playback for 4K NPU coherence. Five memory tiers detailed: working (RAM), short-term (SQLite conversation summaries), long-term (sqlite-vec atomic facts with embeddings), episodic (events/outcomes), tool (filesystem). Post-session LLM-based extraction captures facts/events. Automatic semantic retrieval (~20-40ms, CPU-only embedding via all-MiniLM-L6-v2) injects relevant memories into every prompt. Cloud provider privacy: memories stripped unless allow_sensitive_data enabled. Updated scope doc to v0.1.9.
+- **Session 8 (2026-02-27):** Confirmed NPU benchmarks from AXERA-TECH and M5Stack docs (DD-029). Qwen3-1.7B confirmed as primary: 7.38 tok/s, 3.3 GB CMM, 4K context. Qwen3-4B evaluated and rejected as primary: 3.65 tok/s, 6.2 GB CMM (fills NPU, only 691 MB remaining — can't co-reside with any model). Noted as future hot-swap option (Pulsar2 v4.2 required). Discovered AXERA-TECH catalog (148 models on HuggingFace) — broader than M5Stack's official list. Updated model allocation tables with confirmed benchmarks, corrected latency budget (7.38 tok/s, not 12-15). Added Qwen3-VL-4B-GPTQ-Int4 to vision hot-swap pool. Updated scope doc to v0.1.10.
 
 ### NEXT SESSION — Resume Here
 **Topic:** TBD — discuss with user. Possible next topics:
