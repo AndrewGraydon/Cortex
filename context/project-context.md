@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-02-27 (Session 4)
+# Last updated: 2026-02-27 (Session 6)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -65,8 +65,13 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-018 | Custom framework over CrewAI/LangGraph/AutoGen | All too heavy/bloated for Pi 5 + 1.7B model constraints |
 | DD-019 | MCP protocol support (client + server) | Standard tool interop; external tools mapped to cognitive tools or action templates with permission gating |
 | DD-020 | Tiered VLM vision system | SmolVLM2-500M always resident; hot-swap to InternVL3-1B/Qwen2.5-VL-3B for detail; camera + webcam + upload |
-| DD-021 | Button-first interaction with Web UI parity | Physical Pi uses Whisplay button (GPIO 11) as sole input via gestures (hold/double-click/single-click/long-press/triple-click); no VAD on Pi; Web UI has full parity via software equivalents |
-| DD-022 | Configurable model provider layer | All model interactions via provider-agnostic Protocol interfaces; 7 providers (axcl, openai, anthropic, google, xai, ollama, openai_compatible); per-profile provider chains with fallback; tool calling auto-adapted; context budgets scale with provider; default offline, cloud opt-in |
+| DD-021 | Button-first interaction with Web UI parity | Physical Pi uses Whisplay button (GPIO 11) as sole input via gestures (hold/double-click/single-click/long-press/triple-click); no VAD anywhere; Web UI has full parity via software equivalents |
+| DD-022 | Configurable model provider layer | All model interactions via provider-agnostic Protocol interfaces; 7 providers (axcl, openai, anthropic, google, xai, ollama, openai_compatible); per-profile provider chains with fallback; tool calling auto-adapted; default offline, cloud opt-in |
+| DD-023 | SenseVoice-Small as ASR engine | Non-autoregressive (single-pass) — 50-75ms per utterance vs Whisper-Small 800-1800ms (autoregressive). 10-20x faster on same NPU. Comparable accuracy for English. Faster Whisper can't use NPU (CPU-only via CTranslate2). Both to be tested Phase 0. |
+| DD-024 | CSI camera via libcamera/picamera2 | Freenove camera module uses CSI connector, not USB. picamera2 is the standard Pi camera interface. |
+| DD-025 | No wake word — button-only activation | With button-first (DD-021) and no VAD, wake word serves no purpose. Removed entirely. No always-on mic, no background audio processing. |
+| DD-026 | Provider-managed context | No centralized context budget scaling. Each provider knows its own limits; agent framework passes full ideal prompt, provider handles truncation. Simplifies architecture. |
+| DD-027 | Tool development pipeline | Structured lifecycle: Specify → Develop → Review → Approve → Deploy. Tools start at Tier 2, promote after supervised use. Sandbox testing, version control, rollback. |
 
 ## Architecture
 Seven-layer stack:
@@ -80,10 +85,10 @@ Seven-layer stack:
 
 ## Implementation Phases
 - **Phase 0** — Hardware foundation (CURRENT)
-- **Phase 1** — Voice loop (VAD + ASR + LLM + TTS end-to-end)
+- **Phase 1** — Voice loop (button activation + ASR + LLM + TTS end-to-end)
 - **Phase 2** — Agent core (tools, permissions, audit, sandbox)
 - **Phase 3** — Web UI
-- **Phase 4** — Dynamic capabilities (tool creation, agent factory, wake word)
+- **Phase 4** — Dynamic capabilities (tool pipeline, agent factory, long-term memory)
 - **Phase 5** — IoT integration (MQTT, Home Assistant)
 - **Phase 6** — Hardening and polish
 
@@ -105,16 +110,18 @@ Seven-layer stack:
 - Workflow engine research (8 engines): n8n (200-860MB), Node-RED (40-80MB+leaks), Temporal (2-4GB), Prefect (500MB+), Windmill (no ARM64), Dagu (Go binary), pypyr (right pattern). All external engines too heavy for Pi — custom in-process Python action engine selected
 - Token budgets for 4K context: Orchestrator ~370 tokens (single classifier call), Super Agent ~4000 tokens (200 system + 150 tools + 3600 working), Utility Agent 0 tokens (deterministic)
 - MCP (Model Context Protocol) supported via Python `mcp` SDK: client mode discovers tools from external servers (HA, n8n), server mode exposes Cortex tools to external AI clients; Streamable HTTP transport on existing FastAPI server
-- Tiered VLM vision: SmolVLM2-500M always resident (~500MB, total NPU ~4.75GB); hot-swap to InternVL3-1B or Qwen2.5-VL-3B for detailed analysis (unloads LLM temporarily, voice pipeline pauses). Three image sources: USB camera (physical Pi), webcam (web UI), file upload (web UI)
+- Tiered VLM vision: SmolVLM2-500M always resident (~500MB, total NPU ~4.75GB); hot-swap to InternVL3-1B or Qwen2.5-VL-3B for detailed analysis (unloads LLM temporarily, voice pipeline pauses). Three image sources: CSI camera via picamera2 (physical Pi), webcam (web UI), file upload (web UI)
 - Whisplay HAT button hardware: single button on GPIO 11 (active low), 50ms debounce. RGB LEDs on GPIO 22/18/16. Same physical design as whisplay-ai-chatbot.
 - Button-first interaction: hold=push-to-talk (record while held, ASR on release), double-click=camera capture+VLM, single-click=approve/confirm, long-press=deny/cancel, triple-click=system menu. No VAD anywhere — both Pi and Web UI use explicit button control for recording boundaries.
 - Web UI parity: every physical Pi capability has a software equivalent — record button (hold-to-talk or click-start/click-stop), webcam/upload for vision, approve/deny buttons for Tier 2/3, status indicator for LED state.
-- Model Provider Layer: provider-agnostic Protocol interfaces for LLM, ASR, TTS, VLM. Seven providers: axcl (local NPU), openai, anthropic, google, xai, ollama, openai_compatible. Per-profile provider chains with fallback and circuit breaker. Tool calling format auto-adapted per provider (NousFnCallPrompt for Qwen3, OpenAI function calling for cloud, etc.). Context budgets scale dynamically based on provider context window (4K local → 16K+ cloud). API keys in .env, cloud calls gated by security layer with auto nftables management. Default: fully offline (axcl only).
+- Model Provider Layer: provider-agnostic Protocol interfaces for LLM, ASR, TTS, VLM. Seven providers: axcl (local NPU), openai, anthropic, google, xai, ollama, openai_compatible. Per-profile provider chains with fallback and circuit breaker. Tool calling format auto-adapted per provider (NousFnCallPrompt for Qwen3, OpenAI function calling for cloud, etc.). Context is provider-managed — each provider handles its own limits, no centralized budget scaling. API keys in .env, cloud calls gated by security layer with auto nftables management. Default: fully offline (axcl only).
+- SenseVoice-Small ASR: non-autoregressive single-pass inference, 50-75ms per utterance on NPU (10-20x faster than Whisper-Small's 800-1800ms autoregressive decoding). Comparable English accuracy. Faster Whisper cannot use NPU (CPU-only via CTranslate2).
+- Tool development pipeline: Specify → Develop → Review → Approve → Deploy lifecycle. Tools start at Tier 2, promote to Tier 1/0 after supervised successful executions. Sandbox testing via bubblewrap, version-controlled with rollback.
 
 ## Open Questions (to resolve during Phase 0)
-1. ~~Can SenseVoice + Qwen3-1.7B + MeloTTS all co-reside in 8GB NPU CMM?~~ Resolved: budget is ~4.75GB, fits with ~2.3GB headroom.
+1. ~~Can SenseVoice + Qwen3-1.7B + Kokoro + SmolVLM2 all co-reside in 8GB NPU CMM?~~ Resolved: budget is ~4.75GB, fits with ~2.3GB headroom.
 2. NPU model hot-swap latency?
-3. Wake word engine choice (Porcupine vs OpenWakeWord)? — deferred to Phase 4 (button-first is default)
+3. ~~Wake word engine choice?~~ Resolved: removed entirely (DD-025). Button-only activation.
 4. Need USB SSD for extended storage?
 5. Enclosure design?
 
@@ -139,15 +146,17 @@ Cortex/
 - **Session 2 (2026-02-27):** Created private GitHub repo (AndrewGraydon/Cortex). Evaluated MeloTTS vs Kokoro-82M for TTS — selected Kokoro (DD-011). Evaluated LCD display approaches — adapting whisplay-ai-chatbot Pillow+cairosvg renderer (DD-012). Deferred web UI framework choice to Phase 3 (DD-013). Revised NPU memory budget from ~4.8GB to ~4.25GB.
 - **Session 3 (2026-02-27):** Refined agent architecture (Layer 4). Researched CAAL (single-agent, not multi-agent as expected), 8 agent frameworks (Qwen-Agent, smolagents, Swarm, ReAct, CrewAI, LangGraph, AutoGen), and 8 workflow engines (n8n, Node-RED, Temporal, Prefect, Windmill, Dagu, pypyr, custom). Designed 3-tier agent hierarchy: Orchestrator (classifier) → Super Agents (reasoning with cognitive tools) → Utility Agents (zero-LLM deterministic dispatch). Core principle: "unconstrained thinking, constrained acting." Custom Python action engine replaces n8n. Qwen-Agent used as library only for NousFnCallPrompt. Updated scope doc to v0.1.3 (DD-014 through DD-018).
 - **Session 4 (2026-02-27):** Continued from Session 3. Added MCP protocol support — client discovers external tools, server exposes Cortex tools (DD-019). Added tiered VLM vision — SmolVLM2-500M always resident, hot-swap to larger VLMs, three image sources (DD-020). Redesigned interaction model to button-first — physical Pi uses Whisplay button (GPIO 11) with gesture recognition (hold=talk, double-click=camera, single-click=approve, long-press=deny, triple-click=menu), no VAD on Pi. Established Web UI parity principle: every physical capability has a software equivalent (DD-021). Updated scope doc to v0.1.6.
-- **Session 5 (2026-02-27):** Added configurable model provider layer (DD-022). All model interactions (LLM, ASR, TTS, VLM) routed through provider-agnostic Protocol interfaces with 7 backend types (axcl, openai, anthropic, google, xai, ollama, openai_compatible). Per-profile provider chains with fallback and circuit breaker. Tool calling format auto-adapted per provider. Context budgets scale with provider context window. Security layer updated for cloud provider network gating and data privacy controls. Default: fully offline (axcl only), cloud/remote opt-in. Updated scope doc to v0.1.7.
+- **Session 5 (2026-02-27):** Added configurable model provider layer (DD-022). All model interactions (LLM, ASR, TTS, VLM) routed through provider-agnostic Protocol interfaces with 7 backend types (axcl, openai, anthropic, google, xai, ollama, openai_compatible). Per-profile provider chains with fallback and circuit breaker. Tool calling format auto-adapted per provider. Security layer updated for cloud provider network gating and data privacy controls. Default: fully offline (axcl only), cloud/remote opt-in. Updated scope doc to v0.1.7.
+- **Session 6 (2026-02-27):** Five design corrections: (1) Camera service changed from USB/V4L2 to CSI/libcamera/picamera2 (DD-024). (2) SenseVoice ASR rationale documented — 10-20x faster than Whisper on NPU due to non-autoregressive architecture (DD-023). (3) Wake word removed entirely — unnecessary with button-first and no VAD (DD-025). (4) Context management simplified to provider-managed — no centralized budget scaling (DD-026). (5) Tool development pipeline added to Agent Factory — Specify→Develop→Review→Approve→Deploy lifecycle with promotion system (DD-027). Fixed stale Phase 1 (VAD→button, MeloTTS→Kokoro) and Phase 4 (wake word→tool pipeline) references. Updated scope doc to v0.1.8.
 
 ### NEXT SESSION — Resume Here
 **Topic:** TBD — discuss with user. Possible next topics:
 - **Phase 0 hardware setup:** Begin actual hardware assembly and driver validation on the Pi 5
 - **Detailed action template design:** Flesh out the built-in action templates for Phase 2
-- **Security layer integration:** Ensure §4.5 security architecture aligns with the new action engine
+- **Security layer deep-dive:** Ensure §4.5 security architecture aligns with action engine and tool pipeline
 - **Memory system design:** Detail the embedding model choice and RAG patterns for 1.7B context
 - **Display UI deep-dive:** Detail the LCD render pipeline, display state machine, and status screen layouts
+- **Super agent YAML definitions:** Draft the initial agent config files for `config/agents/`
 
 ---
 

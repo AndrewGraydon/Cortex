@@ -24,8 +24,8 @@ hal:
     idle_timeout: 30  # seconds before dimming
     orientation: 0  # 0, 90, 180, 270
   camera:
-    enabled: false  # Enable when USB camera attached
-    device: /dev/video0
+    enabled: false  # Enable when CSI camera module attached
+    # Uses libcamera/picamera2 (CSI interface — Freenove, Raspberry Pi Camera, etc.)
     resolution: [640, 480]  # Width x height for VLM input
     format: jpeg
     quality: 85  # JPEG quality (0-100)
@@ -36,9 +36,8 @@ hal:
     sleep_on_battery_idle: 300  # seconds
 
 voice:
-  activation_mode: button  # button (default — both Pi and Web UI), wake_word (Phase 4)
-  wake_word: cortex  # Used only when activation_mode: wake_word (Phase 4)
-  # No VAD — both physical Pi and Web UI use explicit button control for recording.
+  activation_mode: button  # button (default — both Pi and Web UI)
+  # No VAD, no wake word — both physical Pi and Web UI use explicit button control for recording.
   # Pi: hardware button (GPIO 11) hold-to-talk.
   # Web UI: software record button (hold-to-talk or click-start/click-stop).
   max_recording_duration: 30  # seconds — safety limit for recording length
@@ -141,7 +140,6 @@ providers:
 # Default: all profiles route to axcl (local NPU) only.
 reasoning:
   default_profile: chat
-  context_adaptation: true  # Scale agent token budgets based on provider context window
   max_tokens: 512  # Default max generation tokens
   temperature: 0.7
   system_prompt_version: v1
@@ -190,9 +188,8 @@ agent:
   super_agents:
     config_dir: config/agents  # YAML agent definitions
     max_llm_calls: 4  # Default per-task limit
-    base_context_window: 4096  # Base budget (scales up with larger provider context windows)
-    base_history_turns: 3  # Base sliding window (scales up with larger context)
     default_model_profile: chat  # Profile from reasoning.profiles
+    # Context management is provider-managed — no artificial token budgets here
   utility_agents:
     enabled: true  # Pure deterministic dispatch
   action_engine:

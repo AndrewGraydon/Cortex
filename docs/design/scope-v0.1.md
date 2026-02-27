@@ -1,5 +1,5 @@
 # Project Cortex — Agentic Local LLM Voice Assistant
-## System Design Scope Document v0.1.7
+## System Design Scope Document v0.1.8
 
 ---
 
@@ -69,7 +69,7 @@ A fully local, privacy-first, voice-and-web AI assistant running on a Raspberry 
 - **Audio Service** — Manages WM8960 codec via ALSA. Handles mic input (16kHz mono for ASR), speaker output, volume control, and audio routing (internal speaker vs external via XH2.0).
 - **Display Service** — Drives Whisplay LCD via SPI (ST7789 controller). Provides framebuffer abstraction for UI rendering. Manages RGB LEDs and button input events.
 - **Power Service** — Interfaces with PiSugar 3 Plus power manager daemon. Reports battery level, charging state, estimated runtime. Triggers power-saving modes. Provides RTC access.
-- **Camera Service** — Manages USB camera via V4L2/libcamera. Provides single-frame capture on demand (not continuous streaming). Supports resolution negotiation and format conversion (JPEG/PNG). Camera is optional hardware — system operates fully without it.
+- **Camera Service** — Manages CSI camera module (e.g., Freenove, Raspberry Pi Camera) via `libcamera`/`picamera2`. Provides single-frame capture on demand (not continuous streaming). Supports resolution negotiation and format conversion (JPEG/PNG). Camera is optional hardware — system operates fully without it.
 
 **Key Design Decisions:**
 - All HAL services run as systemd units with dedicated service accounts (no root).
@@ -107,12 +107,11 @@ This eliminates VAD entirely from the system — no Silero, no silence detection
 
 | Model | Purpose | Est. NPU Memory | Est. Performance |
 |---|---|---|---|
-| Whisper-small or SenseVoice | ASR (Speech-to-Text) | ~500MB | RTF < 0.1 (faster than real-time) |
+| SenseVoice-Small | ASR (Speech-to-Text) | ~500MB | RTF 0.015 (67x real-time), ~50-75ms per utterance |
 | Qwen3-1.7B (w8a16) | Reasoning / conversation | ~3.5GB | ~12-15 tok/s |
 | Kokoro-82M (v1.0, axmodel) | TTS (Text-to-Speech) | ~237MB | RTF 0.067 (15x real-time) |
-| Wake word (custom/Porcupine) | Always-on trigger (Phase 4) | ~10MB | Real-time on Pi CPU |
 | SmolVLM2-500M | Vision (always resident) | ~500MB | TBD (Phase 0 testing) |
-| **Total estimated (with VLM)** | | **~4.75GB** | Leaves ~2.3GB headroom |
+| **Total estimated (with VLM)** | | **~4.74GB** | Leaves ~2.3GB headroom |
 
 **Vision model hot-swap pool (loaded on demand, replaces Qwen3-1.7B temporarily):**
 
@@ -123,9 +122,8 @@ This eliminates VAD entirely from the system — no Silero, no silence detection
 
 **Activation Modes:**
 1. **Button push-to-talk (physical Pi, default)** — Whisplay button (GPIO 11) held down; audio captured while held, sent to ASR on release. Zero false activations.
-2. **Button push-to-talk (Web UI)** — Browser record button mirrors physical button: hold-to-talk or click-to-start/click-to-stop. User controls recording boundaries explicitly. No VAD needed.
-3. **Wake word (Phase 4, optional)** — Always-on lightweight detector on Pi CPU, NPU wakes for ASR. Can coexist with push-to-talk.
-4. **Text input (Web UI)** — Bypasses voice pipeline entirely.
+2. **Button push-to-talk (Web UI)** — Browser record button mirrors physical button: hold-to-talk or click-to-start/click-to-stop. User controls recording boundaries explicitly.
+3. **Text input (Web UI)** — Bypasses voice pipeline entirely.
 
 **Latency Budget (voice round-trip target: < 3 seconds):**
 - ASR: < 500ms for typical utterance (button release triggers immediate ASR — no VAD delay on any interface)
@@ -228,17 +226,15 @@ Different providers use different tool calling formats. The Model Router handles
 
 **Canonical internal format:** OpenAI function calling schema (most widely supported). Cognitive tools and action templates are defined once in canonical format. The Tool Adapter translates to/from provider-specific formats at the boundary. For `axcl`, Qwen-Agent NousFnCallPrompt remains the parser.
 
-#### 4.3.3 Context Window Adaptation
+#### 4.3.3 Provider-Managed Context
 
-Agent token budgets adapt dynamically based on the active provider's context window:
+Each provider knows its own context window limits. The agent framework passes the full conversation (system prompt, tool descriptions, history, user request) to the provider — the provider handles truncation or summarization if the context exceeds its capacity.
 
-| Provider Context | Orchestrator Budget | Super Agent Budget | Strategy |
-|---|---|---|---|
-| 4K (local NPU, effective) | ~370 tok | ~4,000 tok | Current budgets — strict, optimized for speed |
-| 32K+ (Ollama, remote LLM) | ~500 tok | ~8,000 tok | Relaxed — more history, richer tool descriptions |
-| 128K+ (cloud APIs) | ~500 tok | ~16,000 tok | Full history retention, detailed tool descriptions |
-
-The Context Manager queries `provider.capabilities.context_window` and scales budgets proportionally. Local NPU budgets are always the minimum floor — cloud models get more room but never less than what works locally.
+**Why no central Context Manager:** With providers ranging from 4K (local NPU) to 200K+ (cloud APIs), a centralized budget system would either over-constrain large-context providers or require complex scaling logic. Instead:
+- The agent framework constructs the ideal prompt (all relevant history, full tool descriptions).
+- The provider truncates from the oldest history if needed, preserving system prompt and current request.
+- Local NPU providers are naturally limited by their 4K effective window — no artificial budgeting required.
+- Cloud providers use their full capacity — more history means better multi-turn reasoning.
 
 #### 4.3.4 Profile-to-Provider Routing
 
@@ -285,7 +281,7 @@ Each row is fully configurable — any profile can be rerouted to any enabled pr
 **Prompt Management:**
 - System prompts stored as versioned templates.
 - Dynamic tool schema injection — only currently relevant tools are included in context.
-- Conversation history managed with sliding window + summarization, scaled by provider context window.
+- Conversation history: full history passed to provider; provider truncates oldest turns if context exceeded.
 - Persona/behavior configurable via web UI.
 
 ---
@@ -498,13 +494,29 @@ Cognitive tools help super agents **think** — they are read-only, safe (Tier 0
 
 Defined in canonical (OpenAI function calling) format. The Tool Adapter (§4.3.2) translates to the active provider's format at call time (NousFnCallPrompt for local Qwen3, native format for cloud APIs).
 
-#### 4.4.7 Agent Factory (Phase 4)
+#### 4.4.7 Agent Factory & Tool Development Pipeline (Phase 4)
 
 The LLM can create new super agents and action templates dynamically:
 - **New super agent:** LLM generates YAML agent definition → security validation → user approval (Tier 3) → registered
 - **New action template:** LLM generates YAML template + Python handler → static analysis → sandbox test → user approval (Tier 3) → registered
 - All dynamically created agents/templates are version-controlled and can be rolled back
 - User can create, modify, and delete agents via voice or web UI
+
+**Tool Development Pipeline** — Tools (action templates) follow a structured lifecycle before deployment:
+
+| Stage | Actor | Output | Gate |
+|---|---|---|---|
+| **Specify** | User or LLM | Tool spec: name, description, inputs/outputs, permission tier, dependencies | User review |
+| **Develop** | LLM (or user) | YAML action template + Python handler implementation | Automated: ruff lint, mypy type check, static security analysis |
+| **Review** | Automated + User | Test results, security scan report, dependency audit | All checks pass |
+| **Approve** | User (Tier 3) | Signed approval with reason | Explicit user confirmation via button or web UI |
+| **Deploy** | System | Template registered, handler loaded, available to agents | Audit log entry |
+
+- **Spec-first:** Every tool starts as a specification (what it does, what it needs, what tier it requires) before any code is written. The LLM can draft specs from natural language requests.
+- **Sandbox testing:** During Review, the handler runs in a bubblewrap sandbox against synthetic inputs. Must pass without errors or policy violations.
+- **Rollback:** Deployed tools are version-controlled. Any version can be rolled back or disabled instantly. Rollback is Tier 1 (auto-approved, logged).
+- **Promotion path:** Tools start at Tier 2 (require approval per-use). After N successful supervised executions (configurable, default 10), the user can promote to Tier 1 (auto-approved, logged) or Tier 0 (auto, silent).
+- **Discovery:** The factory exposes a tool catalog (via web UI and voice) showing all tools with status (draft/review/approved/deployed/disabled), version, usage stats, and permission tier.
 
 #### 4.4.8 MCP Protocol Support
 
@@ -551,29 +563,21 @@ servers:
 
 #### 4.4.9 Context Management
 
-Per-agent token budgets enforced by a Context Manager, **scaled dynamically based on the active provider's context window** (see §4.3.3):
+Context management is **provider-managed** (see §4.3.3). The agent framework constructs the ideal prompt and the provider handles its own context limits.
 
-**Base budgets (local NPU, 4K effective context):**
+**Prompt construction per agent type:**
 
-| Agent Type | System Prompt | Tool Descs | Working Space | Total |
+| Agent Type | System Prompt | Tool Descs | History | Generation |
 |---|---|---|---|---|
-| Orchestrator | 150 | 150-240 | 20 (gen) | ~370 |
-| Super Agent | 200 | 150 | 3,600 | ~4,000 |
-| Utility Agent | 0 | 0 | 0 | 0 |
+| Orchestrator | Classifier instructions (~150 tok) | Agent descriptions (~150-240 tok) | Current request only | Agent name (~20 tok) |
+| Super Agent | Domain instructions (~200 tok) | 2-3 cognitive tools (~150 tok) | Full conversation (provider truncates if needed) | Multi-turn reasoning |
+| Utility Agent | None | None | None | None (deterministic) |
 
-**Scaled budgets (when provider context > 4K):**
-
-| Provider Context | Super Agent Total | History Turns | Tool Desc Detail |
-|---|---|---|---|
-| 4K (local NPU) | ~4,000 tok | 2-3 turns | Minimal |
-| 32K+ (Ollama, remote) | ~8,000 tok | 5-8 turns | Standard |
-| 128K+ (cloud APIs) | ~16,000 tok | 15-20 turns | Full with examples |
-
-- Conversation history: sliding window, turn count scaled by available context
-- Cross-turn context: summarize prior turns only when multi-step planning requires it
-- Tool descriptions: pre-computed and cached, detail level scales with context budget
+- The agent framework always passes the **full ideal prompt** to the provider
+- The provider truncates from oldest history first if context is exceeded, preserving system prompt and current request
+- Local NPU (4K effective) naturally limits to 2-3 history turns; cloud providers (128K+) retain full conversation
+- Tool descriptions: pre-computed and cached, always included in full
 - Orchestrator passes only the relevant user request to the selected agent, not the full orchestrator context
-- The Context Manager always uses local NPU budgets as the minimum floor
 
 #### 4.4.10 Memory System
 
@@ -853,12 +857,12 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 - Bus conflict verification
 
 ### Phase 1 — Voice Loop (Weeks 3-5)
-- VAD (Silero) on Pi CPU
-- ASR (SenseVoice/Whisper) on NPU
+- Button activation (GPIO 11 hold-to-talk) on Pi
+- ASR (SenseVoice) on NPU
 - LLM (Qwen3-1.7B) on NPU — basic chat
-- TTS (MeloTTS) on NPU
+- TTS (Kokoro-82M) on NPU
 - End-to-end voice conversation
-- Push-to-talk, LCD status display
+- Button gesture recognition, LCD status display
 - Latency profiling
 
 ### Phase 2 — Agent Core (Weeks 6-9)
@@ -878,10 +882,10 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 - Settings
 
 ### Phase 4 — Dynamic Capabilities (Weeks 13-16)
-- Dynamic tool creation
-- Agent factory
+- Tool development pipeline (specify → develop → review → approve → deploy)
+- Agent factory (dynamic super agent creation)
 - Long-term memory with embeddings
-- Wake word detection
+- Tool promotion system (Tier 2 → Tier 1 → Tier 0 after supervised use)
 - Power management profiles
 - Network security hardening
 
@@ -905,7 +909,7 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 ## 7. Open Questions & Risks
 
 ### Open Questions
-1. Wake word engine: Porcupine vs OpenWakeWord vs custom?
+1. ~~Wake word engine?~~ Resolved — removed entirely (DD-025). Button-only activation.
 2. NPU model hot-swapping latency?
 3. External USB SSD for storage?
 4. Custom 3D-printed enclosure?
@@ -954,8 +958,13 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 | DD-018 | Custom framework over CrewAI/LangGraph/AutoGen | 2026-02-27 | CrewAI: 32GB RAM, ChromaDB dep; AutoGen: conversation paradigm fills 4K in 2-3 exchanges; LangGraph: closest but langchain-core bloat for ~500 LOC of graph execution; smolagents: prompt bloat; Swarm: deprecated |
 | DD-019 | MCP protocol support (client + server) | 2026-02-27 | Standard tool interop via Python `mcp` SDK; client discovers external tools (HA, n8n) and maps to cognitive tools or action templates with permission gating; server exposes Cortex tools to external AI clients via Streamable HTTP on FastAPI |
 | DD-020 | Tiered VLM vision system | 2026-02-27 | SmolVLM2-500M always resident (~500MB) for quick image descriptions; hot-swap to InternVL3-1B or Qwen2.5-VL-3B for detailed analysis (unloads LLM temporarily). Three input sources: USB camera (physical), webcam (web UI), image upload (web UI). |
-| DD-021 | Button-first interaction with Web UI parity | 2026-02-27 | Physical Pi uses Whisplay button (GPIO 11) as sole input — hold=push-to-talk, double-click=camera capture, single-click=approve, long-press=deny/cancel, triple-click=system menu. No VAD on physical Pi (eliminates false activations and privacy concerns). Web UI provides full parity via software equivalents (record button with VAD, webcam/upload, approve/deny buttons). |
+| DD-021 | Button-first interaction with Web UI parity | 2026-02-27 | Physical Pi uses Whisplay button (GPIO 11) as sole input — hold=push-to-talk, double-click=camera capture, single-click=approve, long-press=deny/cancel, triple-click=system menu. No VAD anywhere (eliminates false activations and privacy concerns). Web UI provides full parity via software equivalents (record button, webcam/upload, approve/deny buttons). |
 | DD-022 | Configurable model provider layer | 2026-02-27 | All model interactions (LLM, ASR, TTS, VLM) routed through provider-agnostic Protocol interfaces. Seven provider types: axcl (local NPU), openai, anthropic, google, xai, ollama, openai_compatible. Per-profile provider chains with automatic fallback and circuit breaker. Tool calling format adapted transparently per provider via Tool Adapter. Context budgets scale dynamically with provider context window. API keys in .env, cloud calls auto-gated by security layer. Default config is fully offline (axcl only) — cloud/remote providers are opt-in. |
+| DD-023 | SenseVoice-Small as primary ASR engine | 2026-02-27 | Non-autoregressive architecture gives 10-20x lower latency than Whisper-Small on AX8850 NPU (~50-75ms vs ~800-1800ms per utterance). English WER comparable (~3-4% vs 3.4%). Same NPU memory (~500MB). Single axmodel vs Whisper's 3 (faster load/swap). 5 languages vs 99+ (sufficient for primary use). Faster Whisper rejected (CPU-only, can't use NPU). Both SenseVoice and Whisper-Small to be tested in Phase 0 for final confirmation. |
+| DD-024 | CSI camera via libcamera/picamera2 | 2026-02-27 | Freenove/Raspberry Pi camera modules use CSI connector, not USB. picamera2 is the standard Python interface on Raspberry Pi OS. |
+| DD-025 | No wake word — button-only activation | 2026-02-27 | With button-first interaction (DD-021) and no VAD, wake word serves no purpose. Removed entirely rather than deferred. Simplifies system — no always-on mic, no background audio processing, no power drain from continuous listening. |
+| DD-026 | Provider-managed context — no central Context Manager | 2026-02-27 | Each provider knows its own context window limits. The agent framework passes full conversation to the provider; the provider handles truncation if needed. Eliminates artificial token budget scaling that was over-engineering for the multi-provider design (DD-022). Local NPU still effectively limited by 4K practical window; cloud providers use their natural capacity. |
+| DD-027 | Tool Development Pipeline | 2026-02-27 | Structured lifecycle for tool creation: Specify (requirements YAML) → Develop (LLM-generated or human-written code) → Review (static analysis, sandbox test, security scan) → Approve (Tier 3 human approval) → Deploy (registered in tool registry). Tools remain in "draft" state until approved. Unapproved tools can be tested in sandbox but cannot affect real systems. |
 
-*Document version: 0.1.7 — Configurable model provider layer (multi-backend support)*
+*Document version: 0.1.8 — Camera CSI, SenseVoice rationale, no wake word, provider-managed context, tool dev pipeline*
 *Status: DRAFT*
