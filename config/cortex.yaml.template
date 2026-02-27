@@ -42,9 +42,11 @@ voice:
     model: sensevoice  # sensevoice, whisper
     language: en
   tts:
-    model: melotts  # melotts, cosyvoice2
-    voice: default
+    model: kokoro  # kokoro, cosyvoice2
+    voice: af_heart  # Kokoro voice ID (e.g., af_heart, am_adam, bf_emma)
     speed: 1.0
+    sample_rate: 24000  # Kokoro native output rate
+    max_chunk_tokens: 96  # axmodel constraint — sentences split at this limit
   latency_budget:
     asr_max_ms: 500
     tts_first_audio_ms: 200

@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-02-27
+# Last updated: 2026-02-27 (Session 2)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -30,7 +30,7 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 - **LLM:** Qwen3-0.6B, Qwen3-1.7B, Qwen2.5-0.5B/1.5B-Instruct, DeepSeek-R1-Distill-Qwen-1.5B, MiniCPM4-0.5B
 - **Multimodal:** InternVL3-1B, Qwen2.5-VL-3B-Instruct, SmolVLM2-500M
 - **ASR:** Whisper, SenseVoice
-- **TTS:** MeloTTS, CosyVoice2
+- **TTS:** Kokoro-82M (selected), MeloTTS, CosyVoice2
 - **Vision:** YOLO11, Depth-Anything-V2, Real-ESRGAN
 - **Other:** CLIP, 3D-Speaker-MT, LivePortrait, Stable Diffusion 1.5
 
@@ -55,6 +55,7 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-008 | ZeroMQ for IPC | Fast, brokerless, simple |
 | DD-009 | bubblewrap for sandboxing | Lightweight, no daemon, fine-grained |
 | DD-010 | systemd for service management | Standard, watchdog, dependencies |
+| DD-011 | Kokoro-82M as TTS engine | 2x faster than MeloTTS on NPU, #1 TTS Arena quality, 237MB NPU, already proven on LLM-8850 |
 
 ## Architecture
 Seven-layer stack:
@@ -83,6 +84,9 @@ Seven-layer stack:
 - Whisplay HAT uses GPIO header (top), SPI for LCD, I2S/I2C for audio
 - Existing reference: PiSugar whisplay-ai-chatbot (TypeScript, basic chatbot)
 - Model loading on NPU uses CMM (compute memory), separate from system memory
+- Kokoro-82M TTS: RTF 0.067 on AX8850 (15x real-time), 237MB CMM, hybrid pipeline (3 axmodel NPU + ONNX vocoder CPU)
+- Kokoro proven on LLM-8850: see https://github.com/AndrewGraydon/kokoro.LM8850
+- Revised NPU memory budget: SenseVoice (~500MB) + Qwen3-1.7B (~3.5GB) + Kokoro (~237MB) = ~4.25GB (fits with ~3.5GB headroom)
 
 ## Open Questions (to resolve during Phase 0)
 1. Can SenseVoice + Qwen3-1.7B + MeloTTS all co-reside in 8GB NPU CMM?
@@ -109,6 +113,7 @@ Cortex/
 
 ## Conversation History Summary
 - **Session 1 (2026-02-27):** Defined full project scope, hardware validation, 7-layer architecture, 4-tier security model, 6-phase implementation plan. Created scope document v0.1 and Phase 0 hardware setup guide. Decided on Python, local-first networking, tiered autonomy, general-purpose focus.
+- **Session 2 (2026-02-27):** Created private GitHub repo (AndrewGraydon/Cortex). Evaluated MeloTTS vs Kokoro-82M for TTS — selected Kokoro (DD-011): 2x faster on NPU, superior voice quality, already proven on LLM-8850. Updated all design docs. Revised NPU memory budget from ~4.8GB to ~4.25GB.
 
 ---
 

@@ -210,8 +210,8 @@ arecord -D plughw:<CARD>,0 -f S16_LE -r 16000 -c 1 -d 5 test_mic.wav
 # Monitor: watch -n 1 axcl-smi
 # Load SenseVoice → record CMM
 # Load Qwen3-1.7B → record CMM
-# Load MeloTTS → record CMM
-# Can all 3 co-exist? Total < 6.5GB?
+# Load Kokoro-82M → record CMM (expect ~237 MiB)
+# Can all 3 co-exist? Target total < 4.5GB (expect ~4.25GB)
 ```
 
 ### Test 5: Battery Under Load
@@ -241,8 +241,8 @@ NPU METRICS (fill in actual values)
 Total CMM:           _______ MiB
 SenseVoice size:     _______ MiB
 Qwen3-1.7B size:     _______ MiB
-MeloTTS size:        _______ MiB
-All 3 co-resident:   YES / NO (total: _______ MiB)
+Kokoro-82M size:     _______ MiB (expected ~237 MiB)
+All 3 co-resident:   YES / NO (total: _______ MiB, expected ~4250 MiB)
 Qwen3-0.6B tok/s:    _______
 Qwen3-1.7B tok/s:    _______
 SenseVoice RTF:      _______

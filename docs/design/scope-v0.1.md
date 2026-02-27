@@ -97,10 +97,10 @@ Mic → VAD ──→ ASR ──→ Intent/LLM ──→ TTS ──→ Speaker
 |---|---|---|---|
 | Whisper-small or SenseVoice | ASR (Speech-to-Text) | ~500MB | RTF < 0.1 (faster than real-time) |
 | Qwen3-1.7B (w8a16) | Reasoning / conversation | ~3.5GB | ~12-15 tok/s |
-| MeloTTS or CosyVoice2 | TTS (Text-to-Speech) | ~800MB | Near real-time |
+| Kokoro-82M (v1.0, axmodel) | TTS (Text-to-Speech) | ~237MB | RTF 0.067 (15x real-time) |
 | Silero VAD | Voice Activity Detection | ~5MB | Real-time on Pi CPU |
 | Wake word (custom/Porcupine) | Always-on trigger | ~10MB | Real-time on Pi CPU |
-| **Total estimated** | | **~4.8GB** | Leaves ~3GB headroom |
+| **Total estimated** | | **~4.25GB** | Leaves ~3.5GB headroom |
 
 **Activation Modes:**
 1. **Push-to-talk** — Whisplay button held down, immediate ASR activation.
@@ -111,11 +111,12 @@ Mic → VAD ──→ ASR ──→ Intent/LLM ──→ TTS ──→ Speaker
 - VAD + ASR: < 500ms for typical utterance
 - LLM inference (50-token response @ 15 tok/s): ~3.3s
 - TTS synthesis: < 500ms (with streaming, first audio < 200ms)
-- **Stretch goal:** Stream TTS while LLM is still generating (token-by-token TTS).
+- **Stretch goal:** Stream TTS while LLM is still generating (sentence-level chunking via Kokoro's native generator pipeline).
 
 **NPU Memory Management Strategy:**
 - Models can be hot-swapped. ASR loads → runs → partially unloads during LLM inference.
-- Alternatively, keep all three resident if memory allows (~4.8GB fits in 8GB).
+- Alternatively, keep all three resident if memory allows (~4.25GB fits in 8GB with ~3.5GB headroom).
+- Kokoro uses a hybrid pipeline: 3 axmodel parts on NPU + ONNX vocoder on CPU, reducing NPU memory pressure.
 - Monitor via NPU Service; degrade gracefully (e.g., smaller ASR model) if memory pressure detected.
 
 ---
@@ -373,7 +374,7 @@ Logs stored in append-only format. Queryable via web UI. Exportable as JSON/CSV.
 | NPU Runtime | AXCL (C/Python) | Official M5Stack SDK |
 | ASR | sherpa-onnx + AXCL | Proven on LLM8850 |
 | LLM | AXCL native | Qwen3-1.7B with Hermes tool calling |
-| TTS | AXCL native | MeloTTS or CosyVoice2 |
+| TTS | AXCL native + ONNX (hybrid) | Kokoro-82M v1.0 (3 axmodel NPU + ONNX vocoder CPU) |
 | Agent Framework | Custom (inspired by Qwen-Agent) | Tight hardware integration needed |
 | Web Framework | FastAPI + Uvicorn | Async, streaming support |
 | Web Frontend | HTMX + Alpine.js | Minimal JS, server-driven |
@@ -490,6 +491,7 @@ Logs stored in append-only format. Queryable via web UI. Exportable as JSON/CSV.
 | DD-003 | Tiered autonomy (4-tier permissions) | 2026-02-27 | Safe actions auto, risky actions need approval |
 | DD-004 | General-purpose assistant focus | 2026-02-27 | Avoids premature domain-specific optimization |
 | DD-005 | Qwen3-1.7B as primary model | 2026-02-27 | Best balance of capability and NPU performance; native tool calling |
+| DD-011 | Kokoro-82M as TTS engine (replacing MeloTTS) | 2026-02-27 | 2x faster on NPU (RTF 0.067 vs 0.125), #1 HuggingFace TTS Arena quality, 54 voices, 237MB NPU vs 800MB estimated for MeloTTS, actively maintained, already proven on LLM-8850 |
 
-*Document version: 0.1 — Initial scope definition*
+*Document version: 0.1.1 — Updated TTS engine to Kokoro-82M*
 *Status: DRAFT*

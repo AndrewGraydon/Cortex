@@ -1,5 +1,5 @@
 # Hardware Research Notes
-# Compiled: 2026-02-27
+# Compiled: 2026-02-27 (updated Session 2)
 
 ## M5Stack LLM-8850 (AX8850)
 
@@ -105,3 +105,50 @@
 - RTC can be used for reliable audit timestamps
 - Watchdog can auto-restart crashed Pi
 - I2C address configurable to avoid conflicts
+
+## Kokoro-82M TTS (Selected — DD-011)
+
+### Specifications
+- Architecture: StyleTTS 2 + ISTFTNet vocoder, decoder-only
+- Parameters: 82 million
+- Developer: hexgrad (open-weight, Apache 2.0 license)
+- Latest: v1.0 (2025-01-27), v1.1-zh (2025-02-26)
+- Voices: 54 across 8 languages (v1.0)
+- Output: 24,000 Hz sample rate
+- HuggingFace rank: #1 TTS Spaces Arena (single-speaker), #2 overall
+
+### AX8850 NPU Deployment
+- Hybrid pipeline: 3 axmodel parts on NPU + ONNX vocoder on CPU
+- CMM memory: 237 MB (fixed, regardless of language)
+- OS memory: 23 MB (English), 233 MB (Chinese)
+- RTF: 0.067 (15x faster than real-time)
+- Init time: ~5.1 seconds (one-time, mitigated by persistent HTTP server)
+- Max token length per chunk: 96 tokens (axmodel constraint)
+- Official AXERA-TECH repo: https://huggingface.co/AXERA-TECH/kokoro.axera
+- Custom LLM-8850 implementation: https://github.com/AndrewGraydon/kokoro.LM8850
+
+### Performance on AX8850
+- Model1 (NPU): 22.1 ms avg
+- Model2 (NPU): 17.4 ms avg
+- Model3 (NPU): 185.3 ms avg
+- Model4 (ONNX/CPU vocoder): 73.7 ms avg
+- Total for 4.8s audio: ~322 ms
+
+### Comparison to MeloTTS (rejected)
+- Kokoro RTF 0.067 vs MeloTTS RTF 0.125 (2x faster)
+- Kokoro 237 MB NPU vs MeloTTS ~44 MB NPU (Kokoro uses more NPU but less than originally estimated 800MB)
+- Kokoro ranked #1 TTS quality vs MeloTTS mid-tier by 2026 standards
+- MeloTTS last release March 2024 (stale) vs Kokoro actively maintained
+- MeloTTS encoder still on CPU (not fully offloaded); Kokoro 3/4 stages on NPU
+
+### Languages (v1.0)
+- American English (a), British English (b), Spanish (e), French (f)
+- Hindi (h), Italian (i), Japanese (j), Mandarin Chinese (z)
+- AXCL axmodel currently supports: English, Chinese, Japanese
+
+### Known Limitations
+- No voice cloning (voice blending only)
+- 96-token max per chunk on axmodel — must sentence-split longer text
+- espeak-ng G2P can produce pronunciation errors on proper nouns
+- Training data primarily narration/reading — conversational speech slightly less natural
+- CPU-only on Pi is slower than real-time (NPU essential)
