@@ -119,6 +119,16 @@ Cortex/
 - **Session 1 (2026-02-27):** Defined full project scope, hardware validation, 7-layer architecture, 4-tier security model, 6-phase implementation plan. Created scope document v0.1 and Phase 0 hardware setup guide. Decided on Python, local-first networking, tiered autonomy, general-purpose focus.
 - **Session 2 (2026-02-27):** Created private GitHub repo (AndrewGraydon/Cortex). Evaluated MeloTTS vs Kokoro-82M for TTS — selected Kokoro (DD-011). Evaluated LCD display approaches — adapting whisplay-ai-chatbot Pillow+cairosvg renderer (DD-012). Deferred web UI framework choice to Phase 3 (DD-013). Revised NPU memory budget from ~4.8GB to ~4.25GB.
 
+### NEXT SESSION — Resume Here
+**Topic:** Refine the agent architecture (Layer 4 in scope doc).
+**Request:** Move from flat agent model to a 3-tier hierarchy:
+- **Cortex (Orchestrator)** — top-level coordinator, routes tasks, creates super agents as needed
+- **Super Agents** — handle complex multi-step tasks with planning, can be created dynamically
+- **Utility Agents** — use predefined tools only, no code generation
+**Reference project:** https://github.com/CoreWorxLab/CAAL (Agentic Abstraction Layer — orchestrator/super agent/utility agent pattern)
+**Key constraint:** Must work with Qwen3-1.7B (~15 tok/s, 4K practical context). Utility agents should be tool-dispatch only (no code gen). Super agents get planning capability. Research CAAL, Qwen-Agent, smolagents, Swarm, and ReAct patterns for suitability.
+**Action:** Research CAAL and agent architecture patterns, then propose a revised Layer 4 spec for the scope doc.
+
 ---
 
 *To resume a design session, share this file and state which phase/layer you want to work on.*
