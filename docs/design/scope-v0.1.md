@@ -337,17 +337,35 @@ Logs stored in append-only format. Queryable via web UI. Exportable as JSON/CSV.
 
 #### 4.6.3 LCD Display Interface
 
+**Implementation:** Adapted from PiSugar whisplay-ai-chatbot display subsystem. Python-based renderer using Pillow + cairosvg for SVG emoji, running a 30 FPS render loop with SPI output at 100 MHz to the ST7789 controller.
+
+**Architecture:**
+- Cortex services send display state via ZeroMQ (replacing the reference project's TCP socket)
+- Python render thread composes frames using Pillow (ImageDraw + ImageFont)
+- SVG emoji rendered via cairosvg for high-quality icons at any size
+- RGB565 conversion via NumPy, sent to ST7789 over SPI
+- Button events sent back to Cortex via ZeroMQ
+- Line-level image caching for performance; LANCZOS resampling for all images
+
 **Display Modes:**
 - **Idle:** Clock, battery level, WiFi status, ambient LED color.
 - **Listening:** Animated waveform showing mic is active.
 - **Thinking:** Processing animation with task description.
-- **Speaking:** Scrolling text of response, or avatar animation.
+- **Speaking:** Scrolling text of response with smooth pixel-level scroll.
 - **Alert:** Full-screen notification for Tier 2/3 approval requests.
 
 **Button Mapping:**
 - Single press: Push-to-talk / confirm action
 - Double press: Cancel / deny action
 - Long press: Cycle display mode / enter settings
+
+**RGB LED States:**
+- Blue (#000055): Idle / sleep
+- Green (#00ff00): Listening
+- Orange (#ff6800): Processing / thinking
+- Blue (#0000ff): Speaking / answering
+- Red: Alert / approval required
+- Smooth 20-step color fading between states
 
 ---
 
@@ -383,7 +401,7 @@ Logs stored in append-only format. Queryable via web UI. Exportable as JSON/CSV.
 | Sandboxing | bubblewrap | Lightweight namespace isolation |
 | Firewall | nftables | Modern, kernel-level |
 | Audio | ALSA + PipeWire | WM8960 driver support |
-| Display | Pillow + SPI driver | Direct LCD control |
+| Display | Pillow + cairosvg + SPI | Adapted from whisplay-ai-chatbot; 30 FPS render loop, SVG emoji, RGB565 via NumPy |
 | Power | pisugar-power-manager | Official PiSugar daemon |
 | Process Mgmt | systemd | Service orchestration |
 
@@ -492,6 +510,8 @@ Logs stored in append-only format. Queryable via web UI. Exportable as JSON/CSV.
 | DD-004 | General-purpose assistant focus | 2026-02-27 | Avoids premature domain-specific optimization |
 | DD-005 | Qwen3-1.7B as primary model | 2026-02-27 | Best balance of capability and NPU performance; native tool calling |
 | DD-011 | Kokoro-82M as TTS engine (replacing MeloTTS) | 2026-02-27 | 2x faster on NPU (RTF 0.067 vs 0.125), #1 HuggingFace TTS Arena quality, 54 voices, 237MB NPU vs 800MB estimated for MeloTTS, actively maintained, already proven on LLM-8850 |
+| DD-012 | Adapt whisplay-ai-chatbot for LCD display | 2026-02-27 | Proven 30 FPS Pillow+cairosvg renderer on this exact hardware; SVG emoji, smooth scrolling, LED fading; adapt and extend rather than rewrite |
+| DD-013 | Defer web UI framework decision to Phase 3 | 2026-02-27 | Web UI is secondary to voice interface; evaluate HTMX+DaisyUI vs NiceGUI vs Svelte when implementation begins |
 
-*Document version: 0.1.1 — Updated TTS engine to Kokoro-82M*
+*Document version: 0.1.2 — LCD display approach, web UI deferred*
 *Status: DRAFT*

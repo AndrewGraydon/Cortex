@@ -56,6 +56,8 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-009 | bubblewrap for sandboxing | Lightweight, no daemon, fine-grained |
 | DD-010 | systemd for service management | Standard, watchdog, dependencies |
 | DD-011 | Kokoro-82M as TTS engine | 2x faster than MeloTTS on NPU, #1 TTS Arena quality, 237MB NPU, already proven on LLM-8850 |
+| DD-012 | Adapt whisplay-ai-chatbot for LCD | Proven Pillow+cairosvg renderer on this hardware; 30 FPS, SVG emoji, smooth scrolling |
+| DD-013 | Defer web UI framework to Phase 3 | Voice-first; evaluate HTMX+DaisyUI vs NiceGUI vs Svelte later |
 
 ## Architecture
 Seven-layer stack:
@@ -87,6 +89,8 @@ Seven-layer stack:
 - Kokoro-82M TTS: RTF 0.067 on AX8850 (15x real-time), 237MB CMM, hybrid pipeline (3 axmodel NPU + ONNX vocoder CPU)
 - Kokoro proven on LLM-8850: see https://github.com/AndrewGraydon/kokoro.LM8850
 - Revised NPU memory budget: SenseVoice (~500MB) + Qwen3-1.7B (~3.5GB) + Kokoro (~237MB) = ~4.25GB (fits with ~3.5GB headroom)
+- whisplay-ai-chatbot LCD architecture: TypeScript brain + Python display over TCP socket; Pillow + cairosvg rendering at 30 FPS; SPI at 100MHz; SVG emoji, LANCZOS resampling, line caching
+- Cortex will adapt this approach, replacing TCP socket IPC with ZeroMQ to match the rest of the stack
 
 ## Open Questions (to resolve during Phase 0)
 1. Can SenseVoice + Qwen3-1.7B + MeloTTS all co-reside in 8GB NPU CMM?
@@ -113,7 +117,7 @@ Cortex/
 
 ## Conversation History Summary
 - **Session 1 (2026-02-27):** Defined full project scope, hardware validation, 7-layer architecture, 4-tier security model, 6-phase implementation plan. Created scope document v0.1 and Phase 0 hardware setup guide. Decided on Python, local-first networking, tiered autonomy, general-purpose focus.
-- **Session 2 (2026-02-27):** Created private GitHub repo (AndrewGraydon/Cortex). Evaluated MeloTTS vs Kokoro-82M for TTS — selected Kokoro (DD-011): 2x faster on NPU, superior voice quality, already proven on LLM-8850. Updated all design docs. Revised NPU memory budget from ~4.8GB to ~4.25GB.
+- **Session 2 (2026-02-27):** Created private GitHub repo (AndrewGraydon/Cortex). Evaluated MeloTTS vs Kokoro-82M for TTS — selected Kokoro (DD-011). Evaluated LCD display approaches — adapting whisplay-ai-chatbot Pillow+cairosvg renderer (DD-012). Deferred web UI framework choice to Phase 3 (DD-013). Revised NPU memory budget from ~4.8GB to ~4.25GB.
 
 ---
 
