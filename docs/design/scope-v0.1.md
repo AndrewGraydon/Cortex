@@ -1,5 +1,5 @@
 # Project Cortex — Agentic Local LLM Voice Assistant
-## System Design Scope Document v0.1.11
+## System Design Scope Document v0.1.12
 
 ---
 
@@ -164,6 +164,61 @@ Overall `status` is the worst of any component: all healthy = healthy, any warni
 3. Self-recoverable failures → tell the user to wait. Non-recoverable → tell the user what manual step is needed.
 4. Full technical details logged to audit system for primary user to review via web UI.
 5. LCD always shows *something* — even in catastrophic failure, display a static "Cortex is having trouble — check the web dashboard" screen.
+
+#### 4.1.2 Power-Aware Operation Profiles
+
+The system adapts its capability level based on power state, balancing performance against battery life. The Power Service publishes charging state changes on the ZeroMQ event bus; the Model Router and other services subscribe and adjust automatically.
+
+**Profile Definitions:**
+
+| Profile | Trigger | LLM | ASR | TTS | Health Polling | Display |
+|---|---|---|---|---|---|---|
+| `mains` | AC power detected (PiSugar charging) | Qwen3-1.7B (`chat` profile) | SenseVoice | Kokoro (full) | Full intervals | Full brightness |
+| `battery` | On battery, > 15% | Qwen3-0.6B (`quick` profile) | SenseVoice | Kokoro (full) | 2x intervals | 50% brightness |
+| `low_battery` | Battery < 15% | Qwen3-0.6B (`quick` profile) | SenseVoice | Kokoro (short) | 4x intervals | 30% brightness |
+| `critical` | Battery < 5% | None (regex-only utility commands) | None | None (LCD text only) | Off | Dim, static |
+
+**Behavior on Profile Transitions:**
+- `mains` → `battery`: Load Qwen3-0.6B, unload Qwen3-1.7B, reduce polling, dim display. Voice feedback: "Switched to battery mode."
+- `battery` → `mains`: Load Qwen3-1.7B, unload Qwen3-0.6B, restore full polling/brightness. Voice feedback: "Full power restored."
+- `battery` → `low_battery`: Further reduce polling, skip post-session memory extraction (defer to next mains period), disable proactive engine.
+- `low_battery` → `critical`: Unload all NPU models, save state, enter minimal mode. LCD shows: "Battery critical — limited to basic commands."
+- `critical` → shutdown: Clean shutdown after saving working memory and pending schedules to SQLite.
+
+**Manual Override:** User can say "Full power mode" (force `mains` profile regardless of battery) or "Battery mode" (force `battery` profile on mains power for quieter operation). Override persists until next power state change or explicit reversal.
+
+**Configuration:** Thresholds and profile mappings in `hal.power.profiles` config section. Model profile names reference existing entries in `reasoning.profiles` (§4.3.5).
+
+#### 4.1.3 NPU Service Protocol
+
+The NPU Service interface is defined as a Python `Protocol` class that is **hardware-agnostic**. No AXCL-specific types, constants, or behaviors leak into the interface. All AXCL specifics are isolated inside the `AxclNpuService` implementation.
+
+```python
+class NpuService(Protocol):
+    """Hardware-agnostic NPU service interface."""
+    async def load_model(self, model_id: str, model_path: Path) -> ModelHandle: ...
+    async def unload_model(self, handle: ModelHandle) -> None: ...
+    async def infer(self, handle: ModelHandle, inputs: InferenceInputs) -> InferenceOutputs: ...
+    async def get_status(self) -> NpuStatus: ...  # temp, memory usage, utilization
+    @property
+    def capabilities(self) -> NpuCapabilities: ...  # total memory, compute TOPS, supported formats
+```
+
+**Key design constraints:**
+- `InferenceInputs` and `InferenceOutputs` use generic numpy arrays, not AXCL-specific tensor types
+- `ModelHandle` is an opaque identifier — implementation-specific metadata hidden behind it
+- `NpuStatus` and `NpuCapabilities` are plain dataclasses with no hardware-specific fields
+- All model-specific logic (axmodel format, CMM memory management, context switching) lives inside `AxclNpuService`
+
+**Implementations:**
+
+| Class | Hardware | Phase |
+|---|---|---|
+| `AxclNpuService` | M5Stack LLM-8850 (AX8850, AXCL runtime) | Phase 1 |
+| `HailoNpuService` | Raspberry Pi AI HAT+ 2 (Hailo-10H, 40 TOPS, 2.5W) | Future |
+| `MockNpuService` | No hardware (returns synthetic responses) | Phase 1 (testing) |
+
+**Rationale:** The Raspberry Pi AI HAT+ 2 (January 2026, $130) offers 40 TOPS, 8GB LPDDR4X, and dramatically lower power (2.5W vs 7W for LLM-8850). By abstracting the NPU interface from Phase 1, Cortex can support multiple NPU backends without changing any code above the HAL layer. This is a design discipline — it constrains how the AXCL implementation is written, not an additional feature.
 
 ---
 
@@ -438,6 +493,8 @@ The Model Router maps task profiles to providers and models:
 
 Each row is fully configurable — any profile can be rerouted to any enabled provider via YAML config. The orchestrator and each super agent reference profiles by name, not specific models.
 
+**Power-Aware Profile Selection:** The Model Router subscribes to power state changes on the ZeroMQ bus (see §4.1.2). When running on battery, the router overrides `chat`/`reason`/`code` profiles to use the `quick` model (Qwen3-0.6B) instead of Qwen3-1.7B, reducing NPU power consumption. The user can manually override this via voice ("Full power mode"). See DD-040.
+
 **Prompt Management:**
 - System prompts stored as versioned templates.
 - Dynamic tool schema injection — only currently relevant tools are included in context.
@@ -504,9 +561,10 @@ The orchestrator is a **single-LLM-call classifier** — not a full agentic loop
 **Routing logic:**
 1. If request matches a utility agent's pattern (regex/keyword) → route directly (no LLM call)
 2. Otherwise → single LLM call to classify intent and select super agent
-3. If no confident match → route to general-purpose super agent
-4. If super agent reports inability → escalate to user
-5. Phase 4: can spawn ephemeral super agents on-the-fly for novel multi-step tasks
+3. If classification confidence < threshold (default 0.6) → request clarification before routing (see §4.6.5)
+4. If no confident match even after clarification → route to general-purpose super agent
+5. If super agent reports inability → escalate to user
+6. Phase 4: can spawn ephemeral super agents on-the-fly for novel multi-step tasks
 
 #### 4.4.3 Super Agents
 
@@ -539,6 +597,7 @@ Total:                                   ~4,000 tokens
 | `system` | System administration | system_info, process_list | shell_exec, file_write, service_restart |
 | `planner` | Multi-step task planning | memory_query, calendar_query | create_reminder, create_task |
 | `vision` | Image understanding | image_analyze, memory_query | save_note (image description) |
+| `pim` | Personal information management | calendar_query, email_query, contact_lookup | calendar_create, notification_send_external, email_send, task_sync |
 
 **Super agent definition (YAML):**
 ```yaml
@@ -571,6 +630,7 @@ Utility agents are **pure deterministic dispatchers** — they consume **zero LL
 - `action_dispatcher` — generic dispatcher for any action template
 - `notification` — LED, LCD, speaker, push notifications
 - `timer` — create/cancel timers and reminders
+- `pim_dispatcher` — calendar, email, and task actions (create/update/delete events, send email, sync tasks)
 
 #### 4.4.5 Action Engine
 
@@ -658,6 +718,12 @@ Cognitive tools help super agents **think** — they are read-only, safe (Tier 0
 | `dictionary_lookup` | Word definitions, synonyms | 0 |
 | `translate` | Translate text between languages (via LLM or API) | 1 |
 | `list_query` | Read items from named lists (shopping, todo, etc.) | 0 |
+| `email_query` | Check inbox for new/matching emails (IMAP read-only) — see §4.4.13 | 0 |
+| `contact_lookup` | Look up contact info (name, phone, email) from local contacts store | 0 |
+
+`calendar_query` has a real backend when external services (§4.4.13) are configured: CalDAV, Google Calendar API, or HA calendar via MCP. When no external service is configured, it returns only local reminders from the scheduling service.
+
+`knowledge_search` queries the Knowledge Store (§4.4.10) — semantic search over ingested document chunks. Returns the most relevant passages for the user's query.
 
 `clock`, `calculator`, `unit_convert`, and `dictionary_lookup` are implemented as pure Python functions — zero LLM cost, zero network, instant response. They are the fastest path for common everyday queries.
 
@@ -791,7 +857,7 @@ Components are assembled in priority order (P1 highest). Higher-priority items a
 
 #### 4.4.10 Memory System
 
-Five memory tiers, from volatile to permanent:
+Six memory tiers, from volatile to permanent:
 
 | Type | Storage | Purpose | Retention |
 |---|---|---|---|
@@ -799,6 +865,7 @@ Five memory tiers, from volatile to permanent:
 | **Short-term Memory** | SQLite | Completed conversation summaries | 30 days (configurable) |
 | **Long-term Memory** | SQLite + sqlite-vec | Atomic facts, user preferences, learned patterns | Persistent |
 | **Episodic Memory** | SQLite + sqlite-vec | Significant events, decisions, outcomes | Persistent |
+| **Knowledge Store** | SQLite + sqlite-vec | Ingested documents, manuals, reference material | Persistent |
 | **Tool Memory** | Filesystem | Generated tools, agent configs, action templates | Persistent |
 
 All memory encrypted at rest (see §4.5). User can inspect, edit, and delete any memory via web UI.
@@ -895,6 +962,20 @@ After a conversation ends (idle timeout, configurable — default 5 minutes):
 - 22MB model, 384-dim embeddings, ~10-20ms per embedding on Pi 5
 - CPU-only — NPU reserved for LLM/ASR/TTS
 - sqlite-vec brute-force KNN is fast enough for up to 50K entries at this scale
+- Shared by long-term memory, episodic memory, and knowledge store — single embedding pipeline
+
+**Knowledge Store** (persistent, document-level):
+- Ingested documents (user manuals, reference material, saved articles, personal notes, recipes)
+- Documents chunked into ~200-token overlapping segments (50-token overlap for context continuity)
+- Each chunk embedded via same all-MiniLM-L6-v2 pipeline on CPU, stored in sqlite-vec
+- Metadata per chunk: source document, chunk index, ingestion date, document title
+- The `knowledge_search` cognitive tool (§4.4.6) queries this store — semantic search over document chunks
+- **With 4K context, RAG is MORE valuable:** inject one high-relevance passage (~200 tokens) instead of hoping an entire document fits in context
+- Ingestion sources: web UI file upload, watched directory (`data/knowledge/`), or via MCP tool
+- Supported formats: `.txt`, `.md`, `.pdf`, `.html`
+- Capacity: configurable (default 100 documents, ~50K chunks)
+- Deduplication: same cosine similarity threshold (0.85) as long-term memory
+- Example: "What does my router manual say about port forwarding?" → retrieves the most relevant chunk from the ingested manual
 
 **Cloud Provider Privacy:**
 - When `allow_sensitive_data: false` (default for cloud providers): the `[Memory]` block and conversation summary are stripped from prompts before sending. Only system prompt, tools, recent turns, and current request are sent.
@@ -1008,6 +1089,171 @@ The notification system is the **proactive delivery mechanism** — the system i
 | Idle + pending P1+ | Notification card overlays idle screen, auto-dismiss after 10s |
 | Active conversation + notification arrives | Badge appears in corner, notification queued |
 | P4 arrives during conversation | Full-screen alert, conversation paused |
+
+#### 4.4.13 External Services Integration
+
+**Design Insight:** Push-to-talk voice interaction is fundamentally the same interaction pattern as messaging. When a user presses a button and says "What's on my calendar today?" or "Send Sarah a message", they expect the assistant to have those capabilities — just as they would in a messaging-based assistant. A voice assistant without calendar, messaging, email, and task capabilities is significantly less useful than one that has them.
+
+**Architecture:** Each external service is a thin adapter implementing a Python `Protocol` interface (same pattern as the Model Provider Layer, §4.3.1). All services are config-driven, default disabled, with API keys stored in `.env`. When a service is disabled, the corresponding cognitive tools and action templates are hidden from agent prompts (zero token cost).
+
+**Calendar Integration:**
+
+| Feature | Implementation | Permission |
+|---|---|---|
+| Read calendar | `calendar_query` cognitive tool (§4.4.6) with CalDAV/Google/MCP backend | Tier 0 |
+| Create event | `calendar_create` action template | Tier 1 |
+| Update event | `calendar_update` action template | Tier 2 |
+| Delete event | `calendar_delete` action template | Tier 2 |
+
+Protocol options:
+- **CalDAV** (default): Standard protocol. Works with Radicale (self-hosted, ~5MB), Nextcloud, iCloud, Google Calendar (via CalDAV bridge). Privacy-preserving when self-hosted.
+- **Google Calendar API**: Direct API access for richer features (shared calendars, reminders). Requires Google Cloud credentials.
+- **MCP**: If a calendar MCP server is already configured (e.g., HA calendar), `calendar_query` routes through MCP client automatically.
+
+Typical use cases:
+- "What's on my calendar today?" → `calendar_query` → lists events
+- "Schedule a dentist appointment for Thursday at 2pm" → `calendar_create` → confirmation
+- "Move my 3pm meeting to 4pm" → `calendar_update` (Tier 2 — approval required)
+
+**Messaging / Notification Relay:**
+
+For sending messages or alerts to the user's mobile when not at the Pi:
+
+| Provider | Type | Requirements |
+|---|---|---|
+| **ntfy** | Self-hosted push notifications | ntfy server (or ntfy.sh cloud), mobile app |
+| **Pushover** | Cloud push notifications | Pushover account, API key in `.env` |
+| **Matrix** | Federated messaging | Matrix account, homeserver URL |
+
+- `notification_send_external` action template (Tier 1)
+- "Send a message to my phone" → push notification via configured provider
+- "Remind me on my phone when the timer is done" → schedule + relay
+- External notifications are a delivery channel for the existing notification system (§4.4.12) — any P1+ notification can optionally be relayed externally
+
+**Email:**
+
+| Feature | Implementation | Permission |
+|---|---|---|
+| Read inbox | `email_query` cognitive tool — check for new/matching emails via IMAP | Tier 0 |
+| Send email | `email_send` action template — compose and send via SMTP | Tier 2 (approval required) |
+
+- "Do I have any new emails?" → IMAP check → summarize subjects/senders
+- "Send an email to Sarah about the meeting" → compose → approval prompt → SMTP send
+- Email credentials in `.env` (IMAP password, SMTP password). IMAP connection uses SSL/TLS.
+- Email send is Tier 2 because sending messages on behalf of the user is a non-trivial action.
+
+**Task Sync (Optional):**
+
+| Provider | Protocol | Use Case |
+|---|---|---|
+| CalDAV VTODO | CalDAV | Self-hosted task management (same server as calendar) |
+| Todoist | REST API | Popular cloud task manager |
+
+- `task_sync` action template: Tier 1 (create), Tier 2 (delete)
+- "Add milk to my shopping list" → if external sync enabled, creates task in Todoist/CalDAV AND updates local list
+- Local lists (§4.4.11 Scheduling Service) always work offline; external sync is additive
+
+**Service Adapter Protocol:**
+```python
+class ExternalServiceAdapter(Protocol):
+    """Provider-agnostic external service interface."""
+    async def connect(self) -> None: ...
+    async def disconnect(self) -> None: ...
+    async def health_check(self) -> bool: ...
+    @property
+    def service_type(self) -> str: ...  # "calendar", "messaging", "email", "tasks"
+```
+
+Concrete implementations: `CalDAVCalendarAdapter`, `NtfyMessagingAdapter`, `IMAPEmailAdapter`, etc.
+
+**Phase Mapping:**
+- Phase 2: Read-only integration — `calendar_query` with CalDAV backend, `email_query` with IMAP
+- Phase 3: Write operations — `calendar_create`, `notification_send_external`, `email_send`
+- Phase 5: Full bidirectional sync — `task_sync`, recurring calendar sync, external notification relay for all priority levels
+
+#### 4.4.14 A2A Protocol Support
+
+Cortex supports the [Agent2Agent (A2A) protocol](https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/) as both **client** and **server**, complementing MCP (§4.4.8). Where MCP provides tool/data access, A2A provides **agent-to-agent task delegation** — the ability for agents to discover each other, negotiate capabilities, and delegate entire tasks.
+
+**Why both MCP and A2A:**
+
+| Protocol | Purpose | Cortex Example |
+|---|---|---|
+| **MCP** | Tool/data access | Cortex calls HA's `get_light_state` tool |
+| **A2A** | Agent task delegation | Cortex delegates "research this topic and summarize" to a more capable agent on the network |
+
+A2A is particularly valuable for Cortex because the local 1.7B model has inherent capability limits. Rather than always falling back to a cloud LLM API (which is just raw inference), A2A allows delegating to a full *agent* running on a more powerful machine — with its own tools, memory, and reasoning loop.
+
+**A2A Client — Delegate to External Agents (Phase 2):**
+- Discover external agents via Agent Cards (JSON metadata at `/.well-known/agent.json`)
+- Agent Cards describe: agent name, capabilities (skills), supported protocols, authentication requirements
+- Orchestrator can delegate tasks to external agents when local capability is insufficient
+- Task lifecycle: create → monitor progress → receive streaming or final result
+- External agent results fed back into super agent context as tool-call responses
+
+**A2A Server — Expose Cortex Agents (Phase 3):**
+- Cortex publishes an Agent Card at `/.well-known/agent.json` on the FastAPI server
+- Each super agent maps to an A2A "skill" in the Agent Card
+- External AI clients (Claude Desktop, other agents, automation scripts) can discover Cortex's capabilities and delegate tasks
+- All incoming A2A tasks go through the permission engine (Tier 2 by default, configurable)
+- Task execution logged in audit system
+
+**Transport:** JSON-RPC over HTTP/SSE — same FastAPI infrastructure as MCP server. No additional port.
+
+**Python SDK:** `python-a2a` package (maintained under Linux Foundation governance).
+
+**A2A Server Configuration:**
+```yaml
+# In cortex.yaml
+agent:
+  a2a:
+    client:
+      enabled: false  # Enable in Phase 2
+      discovery_urls: []  # URLs to check for Agent Cards
+      connect_timeout: 5
+      default_permission_tier: 2
+    server:
+      enabled: false  # Enable in Phase 3
+      expose_agents: [general, home, research, pim, planner]
+```
+
+#### 4.4.15 Proactive Intelligence Engine
+
+Traditional voice assistants are entirely reactive — they respond only when spoken to. The Proactive Intelligence Engine enables Cortex to **initiate** useful interactions based on learned patterns, time-of-day context, and event correlations.
+
+**Pattern Detection Sources:**
+
+| Source | Signal | Example |
+|---|---|---|
+| Episodic memory | Repeated time-based actions | User checks weather every morning at 7:15 AM |
+| Scheduling service | Upcoming reminders + calendar | Meeting in 30 minutes + traffic conditions |
+| Smart home events | Sensor triggers + context | Doorbell rang + user has "expect package" reminder |
+| Health monitoring | System state changes | Battery dropping below threshold while user is away |
+
+**Proactive Interaction Types:**
+
+| Type | Description | Delivery |
+|---|---|---|
+| **Morning briefing** | Weather, calendar summary, reminders for the day | P1-P2 notification at learned wakeup time |
+| **Context correlation** | Connect related events across sources | P2-P3 notification: "Your package may have arrived — the doorbell rang" |
+| **Routine suggestion** | Suggest automating detected patterns | P1 notification: "You check the weather every morning. Want me to include it in your briefing?" |
+| **Anticipatory reminder** | Proactively remind based on calendar context | P2 notification: "You have a meeting in 30 minutes" |
+
+**Implementation:**
+- Scheduled "think" loop: runs every 5 minutes during idle time (no active voice session)
+- Single short LLM inference using `quick` profile (Qwen3-0.6B) — minimal NPU cost when idle
+- Queries episodic memory for recent patterns, checks upcoming calendar/reminders/timers
+- Output: ranked notification candidates, delivered via existing notification system (§4.4.12)
+- Notifications respect DND, priority levels, and conversation-aware queueing
+
+**User Control:**
+- Fully opt-in: disabled by default in config
+- Morning briefing: configurable contents (weather, calendar, reminders, smart home summary)
+- Routine suggestions: minimum occurrence threshold before suggesting (default 5 repetitions)
+- Per-routine enable/disable via web UI
+- "Stop telling me about [X]" — disables that specific proactive trigger
+
+**Privacy:** Proactive engine operates entirely locally. Pattern detection uses on-device episodic memory. No data sent to external services for pattern analysis.
 
 ---
 
@@ -1312,6 +1558,45 @@ System prompt templates stored in `config/prompts/` directory, versioned (v1, v2
 - **Agent-specific addendum** (per super agent YAML `system_prompt` field)
 - **Per-persona privacy constraints** (Guest mode strips memory references and adds "Do not reference personal information about the household")
 
+#### 4.6.5 Conversational Clarification & Repair
+
+A 1.7B model will misunderstand intent more often than a 70B model. Having a structured clarification strategy is *more* important on constrained hardware, not less.
+
+**Confidence-Gated Routing:**
+When the orchestrator's classification confidence is below threshold (configurable, default 0.6), it does NOT silently route to the best-guess agent. Instead, it requests clarification: "I think you want to [X]. Is that right?" This prevents silent misrouting — the most frustrating failure mode for users.
+
+**Slot Filling:**
+When an action template has required parameters that the LLM could not extract from the user's utterance, the system asks specifically for the missing information rather than failing or guessing:
+- "Which light?" (missing `entity_id`)
+- "For how long?" (missing `duration`)
+- "What time?" (missing `fires_at`)
+- Slot-filling prompts use the `quick` model profile (Qwen3-0.6B) for minimal latency.
+
+**Disambiguation:**
+When multiple agents or entities match the user's request, offer options rather than guessing:
+- "Did you mean the kitchen lights or the living room lights?"
+- "I found both a timer and a reminder. Which do you want to check?"
+- Maximum 3 options offered (configurable). If more than 3 match, ask a narrowing question instead.
+
+**Escalating Repair Ladder:**
+When the system cannot understand the user's intent after an initial attempt:
+
+| Round | Strategy | Example |
+|---|---|---|
+| 1 | Rephrase / restate understanding | "I think you're asking about [X]. Is that right?" |
+| 2 | Offer specific options | "I can help with A, B, or C. Which one?" |
+| 3 (max) | Open acknowledgment | "I'm having trouble understanding. Could you say it differently?" |
+
+Maximum clarification rounds per user turn: 2 (configurable via `clarification.max_rounds`). After max rounds, apologize and suggest the web UI for complex requests.
+
+**Sentiment-Aware Adaptation:**
+The system prompt includes instructions to detect frustration cues in the user's text (zero model cost — no separate sentiment model):
+- If the user repeats a request verbatim, be more concise and offer direct options
+- If the user's language becomes terse or includes frustration markers ("I said...", "no, not that"), skip verbose explanations and get to the point
+- Never match frustration with frustration — remain calm and helpful
+
+**Future (Phase 3+):** Simple audio feature extraction (pitch variance, speech rate, volume) on CPU during ASR as additional signal. These prosodic features correlate with urgency/frustration and can be passed as context to the LLM. Not a separate model — just NumPy analysis of the raw audio buffer.
+
 ---
 
 ### 4.7 Smart Home / IoT Integration
@@ -1325,6 +1610,28 @@ System prompt templates stored in `config/prompts/` directory, versioned (v1, v2
 | Phase 2 | **Home Assistant API** | Full HA integration |
 | Phase 3 | **Matter/Thread** | Native modern smart home protocol |
 | Phase 3 | **Bluetooth LE** | Proximity-based triggers, beacons |
+| Phase 5 | **Wyoming** | Local voice satellite protocol for Home Assistant (STT/TTS provider, optional satellite) |
+
+#### 4.7.1 Wyoming Protocol Bridge
+
+Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming protocol](https://www.home-assistant.io/integrations/wyoming/) — the de facto standard for local voice satellite integration.
+
+**Three operating modes:**
+
+| Mode | Description | Data Flow |
+|---|---|---|
+| **STT Provider** | Expose SenseVoice as a Wyoming speech-to-text service | HA sends audio → Cortex ASR on NPU → returns text to HA |
+| **TTS Provider** | Expose Kokoro as a Wyoming text-to-speech service | HA sends text → Cortex TTS on NPU → returns audio to HA |
+| **Satellite (optional)** | Cortex acts as a Wyoming voice satellite | HA orchestrates Assist pipeline; Cortex provides mic/speaker I/O + optional local ASR/TTS |
+
+**Implementation:**
+- Uses the Python `wyoming` package (maintained by Home Assistant team)
+- STT and TTS providers run as separate TCP listeners on configurable ports (default 10300/10200)
+- Optional systemd service (`cortex-wyoming.service`), can be enabled/disabled independently
+- Wyoming protocol is JSONL over TCP — minimal overhead, no additional dependencies
+- In STT/TTS provider modes, Cortex's NPU-accelerated models replace HA's default Whisper/Piper, providing faster inference on the same network
+
+**Relationship to Cortex's own voice pipeline:** Wyoming services share the same NPU models (SenseVoice, Kokoro) but operate independently of Cortex's voice pipeline. When Cortex is actively in a voice conversation, Wyoming requests are queued or rejected (NPU is busy). When Cortex is idle, Wyoming requests are served immediately. This allows Cortex to be both an independent voice assistant AND a high-performance voice service for the broader HA ecosystem.
 
 ---
 
@@ -1353,6 +1660,10 @@ System prompt templates stored in `config/prompts/` directory, versioned (v1, v2
 | Display | Pillow + cairosvg + SPI | Adapted from whisplay-ai-chatbot; 30 FPS render loop, SVG emoji, RGB565 via NumPy |
 | Power | pisugar-power-manager | Official PiSugar daemon |
 | Process Mgmt | systemd | Service orchestration |
+| Agent Interop | A2A Protocol (Python `python-a2a` SDK) | Google A2A v0.3 for agent-to-agent delegation; client (discover/delegate) + server (expose Cortex agents) |
+| Voice Satellite | Wyoming Protocol (Python `wyoming` package) | HA standard for local voice satellites; expose SenseVoice STT + Kokoro TTS to Home Assistant |
+| Calendar | CalDAV / Google Calendar API | Standard calendar protocol; Radicale (self-hosted) or Google API or HA MCP |
+| Messaging | ntfy / Pushover / Matrix | Lightweight push notifications to mobile; self-hosted or cloud options |
 
 ---
 
@@ -1365,6 +1676,10 @@ System prompt templates stored in `config/prompts/` directory, versioned (v1, v2
 - PiSugar 3 Plus integration
 - HAL services as systemd units
 - Bus conflict verification
+- **Investigation:** Speculative decoding — test if AXCL supports Qwen3-0.6B draft + Qwen3-1.7B verify pattern
+- **Investigation:** Constrained generation — test if AXCL supports grammar-guided decoding for structured tool call output
+- **Investigation:** Moonshine ASR — evaluate Moonshine Tiny (26MB) for streaming partial transcription during button hold
+- **Investigation:** Unified multimodal — test Qwen3-VL-2B (7.80 tok/s, 3.7 GB) tool-calling accuracy as unified LLM+VLM replacement
 
 ### Phase 1 — Voice Loop (Weeks 3-5)
 - Button activation (GPIO 11 hold-to-talk) on Pi
@@ -1377,6 +1692,8 @@ System prompt templates stored in `config/prompts/` directory, versioned (v1, v2
 - Button gesture recognition, LCD status display
 - System prompt persona v1 (`config/prompts/system_v1.txt`)
 - Latency metric collection (TTFA, ASR, prefill, chunk, inter-chunk)
+- Power-aware operation profiles — design and basic mains/battery detection (DD-040)
+- NPU Service Protocol abstraction — hardware-agnostic interface, AXCL implementation (DD-041)
 
 ### Phase 2 — Agent Core (Weeks 6-9)
 - Tool calling (Hermes templates)
@@ -1390,6 +1707,10 @@ System prompt templates stored in `config/prompts/` directory, versioned (v1, v2
 - Notification system (5 priority levels, LCD integration, DND)
 - List management (shopping lists, todo lists)
 - Health monitoring service and `/api/health` endpoint
+- Conversational clarification & repair — confidence gating, slot filling, disambiguation (DD-034)
+- External services: read-only — CalDAV calendar_query backend, IMAP email_query (DD-035)
+- A2A protocol client — discover and delegate to external agents (DD-036)
+- Power profile auto-switching based on PiSugar charging state (DD-040)
 
 ### Phase 3 — Web UI (Weeks 10-12)
 - FastAPI backend + WebSocket streaming
@@ -1399,14 +1720,19 @@ System prompt templates stored in `config/prompts/` directory, versioned (v1, v2
 - Settings
 - Notification center in web UI
 - WebSocket notification push + browser notifications (P2+)
+- External services: write operations — calendar_create, notification_send_external, email_send (DD-035)
+- A2A protocol server — Agent Card, expose Cortex agents to external clients (DD-036)
+- Document upload UI for knowledge store (DD-039)
 
 ### Phase 4 — Dynamic Capabilities (Weeks 13-16)
 - Tool development pipeline (specify → develop → review → approve → deploy)
 - Agent factory (dynamic super agent creation)
 - Long-term memory with embeddings
 - Tool promotion system (Tier 2 → Tier 1 → Tier 0 after supervised use)
-- Power management profiles
+- Power management profiles (DD-040 — full implementation)
 - Network security hardening
+- Knowledge store & document RAG backend — chunking, embedding, retrieval (DD-039)
+- Proactive intelligence engine — pattern detection design (DD-038)
 
 ### Phase 5 — IoT & Automation (Weeks 17-20)
 - MQTT client
@@ -1416,6 +1742,9 @@ System prompt templates stored in `config/prompts/` directory, versioned (v1, v2
 - LLM-generated automations
 - Smart home alert routing through notification system
 - Weather API integration (`weather_query` cognitive tool)
+- Wyoming protocol bridge — STT/TTS provider, optional satellite mode (DD-037)
+- External services: full bidirectional sync, task_sync (DD-035)
+- Proactive intelligence engine — implementation (DD-038)
 
 ### Phase 6 — Hardening & Polish (Weeks 21-24)
 - Security audit
@@ -1446,6 +1775,9 @@ System prompt templates stored in `config/prompts/` directory, versioned (v1, v2
 | AXCL ecosystem immaturity | Missing features | Pin versions; abstract NPU backend |
 | Sandbox overhead on Pi 5 | Latency increase | bubblewrap is near-zero overhead |
 | I2C conflicts (Whisplay + PiSugar) | Hardware malfunction | Disable PiSugar AUTO switch |
+| External service availability (CalDAV, IMAP, ntfy) | PIM features degraded | All external services optional, graceful degradation, local-only mode always works |
+| A2A protocol maturity (v0.3) | Breaking changes | Pin SDK version; A2A is additive, core functionality independent |
+| Hailo/AXCL divergence | NPU lock-in | NPU Service Protocol abstraction (DD-041) isolates implementation |
 
 ---
 
@@ -1462,6 +1794,13 @@ System prompt templates stored in `config/prompts/` directory, versioned (v1, v2
 - Health endpoint responds within 100ms
 - System auto-recovers from service crash within 10 seconds (systemd restart)
 - All error states produce user-friendly feedback (never raw errors via voice or LCD)
+- Clarification triggers when orchestrator confidence < threshold (never silent misrouting)
+- Calendar query returns results within 2 seconds for local CalDAV
+- External notification delivery (ntfy/Pushover) within 5 seconds of trigger
+- Knowledge store retrieval adds < 50ms to prompt construction latency
+- Power profile transitions within 5 seconds of charging state change
+- NPU Service Protocol has zero AXCL-specific type imports at the interface level
+- Wyoming STT/TTS services pass Home Assistant compatibility tests
 
 ---
 
@@ -1491,12 +1830,20 @@ System prompt templates stored in `config/prompts/` directory, versioned (v1, v2
 | DD-025 | No wake word — button-only activation | 2026-02-27 | With button-first interaction (DD-021) and no VAD, wake word serves no purpose. Removed entirely rather than deferred. Simplifies system — no always-on mic, no background audio processing, no power drain from continuous listening. |
 | DD-026 | Provider-managed context — no central Context Manager | 2026-02-27 | Each provider knows its own context window limits. The agent framework passes full conversation to the provider; the provider handles truncation if needed. Eliminates artificial token budget scaling that was over-engineering for the multi-provider design (DD-022). Local NPU still effectively limited by 4K practical window; cloud providers use their natural capacity. |
 | DD-027 | Tool Development Pipeline | 2026-02-27 | Structured lifecycle for tool creation: Specify (requirements YAML) → Develop (LLM-generated or human-written code) → Review (static analysis, sandbox test, security scan) → Approve (Tier 3 human approval) → Deploy (registered in tool registry). Tools remain in "draft" state until approved. Unapproved tools can be tested in sandbox but cannot affect real systems. |
-| DD-028 | Conversation context assembly and memory system | 2026-02-27 | Context Assembler builds prompts in priority order: system prompt → current request → tools → auto-injected memories → rolling summary → recent turns → older history. Rolling summary (generated during TTS playback, hidden latency) maintains coherence on 4K local NPU. Five memory tiers: working (RAM, session), short-term (SQLite, conversation summaries), long-term (SQLite + sqlite-vec, atomic facts with embeddings), episodic (events), tool (filesystem). Post-session LLM extraction captures facts/events. Automatic semantic retrieval injects relevant memories into every prompt (~20-40ms, CPU-only embedding via all-MiniLM-L6-v2). Cloud providers get full history + memories; local NPU gets summary + recent turns + memories. Memory stripped from cloud calls unless `allow_sensitive_data` enabled. |
+| DD-028 | Conversation context assembly and memory system | 2026-02-27 | Context Assembler builds prompts in priority order: system prompt → current request → tools → auto-injected memories → rolling summary → recent turns → older history. Rolling summary (generated during TTS playback, hidden latency) maintains coherence on 4K local NPU. Six memory tiers (DD-039 added Knowledge Store): working (RAM, session), short-term (SQLite, conversation summaries), long-term (SQLite + sqlite-vec, atomic facts with embeddings), episodic (events), tool (filesystem). Post-session LLM extraction captures facts/events. Automatic semantic retrieval injects relevant memories into every prompt (~20-40ms, CPU-only embedding via all-MiniLM-L6-v2). Cloud providers get full history + memories; local NPU gets summary + recent turns + memories. Memory stripped from cloud calls unless `allow_sensitive_data` enabled. |
 | DD-029 | Qwen3-1.7B confirmed as primary LLM (4B rejected) | 2026-02-27 | Confirmed benchmarks on M.2 + Pi 5: Qwen3-1.7B uses 3.3 GB CMM at 7.38 tok/s (4K context). Qwen3-4B uses 6.2 GB CMM at 3.65 tok/s (2,559 max tokens) — only 691 MB remaining, cannot co-reside with ANY other model. Qwen3-4B is not viable as primary (half the speed, less context, requires serial model swapping for every ASR/TTS call). Qwen3-4B noted as future hot-swap option for heavy local reasoning (requires Pulsar2 v4.2, not yet released). AXERA-TECH catalog (148 models) provides additional options: Qwen3-VL-4B-GPTQ-Int4 as combined LLM+VLM hot-swap, DeepSeek-R1-Distill-Qwen-1.5B as alternative reasoning model. |
 | DD-030 | Voice interaction lifecycle | 2026-03-01 | Complete user-facing interaction model. Session auto-starts on first button press, ends on 5-min idle or explicit farewell (regex-matched, zero LLM cost). Interruption: long-press stops TTS immediately, new push-to-talk interrupts and replaces (interrupted response marked as truncated in history — system tracks what was actually heard vs planned). ASR errors get spoken retry prompts, LLM failures retry then fallback to cloud, TTS failures fall back to LCD text. All state-changing actions get spoken confirmations. "What can you do?" served from pre-defined per-persona templates (zero LLM cost). System prompt persona "Cortex": concise, warm, honest about uncertainty, voice responses <50 tokens. Prompt templates versioned in `config/prompts/`. |
 | DD-031 | Streaming voice pipeline | 2026-03-01 | Sentence-boundary streaming TTS to achieve <5s time-to-first-audio despite 7.38 tok/s LLM speed. Sentence Detector buffers LLM tokens, flushes on sentence-ending punctuation (min 8, max 96 tokens matching Kokoro axmodel limit). TTS Queue synthesizes each sentence via Kokoro as it arrives (~200ms per short sentence at RTF 0.067). LLM and TTS co-resident on NPU — model multiplexing enables parallel generation and synthesis (Phase 0 verification required). Audio chunks played sequentially with 10ms crossfade. Metrics: TTFA, ASR latency, prefill latency, chunk latency, inter-chunk gap. Falls back to sequential mode if NPU multiplexing proves too slow. |
 | DD-032 | Utility tools, scheduling, and notification system | 2026-03-01 | 9 new cognitive tools: clock, timer_query, reminder_query, weather_query, calculator, unit_convert, dictionary_lookup, translate, list_query (pure Python where possible, zero LLM cost). 7 new action templates: timer_set/cancel, reminder_set/cancel, list CRUD (all Tier 1). Scheduling Service: SQLite-backed persistent timers and reminders (`data/schedules.db`), survives reboots, asyncio-based sub-second precision, reminder snooze (max 3). Notification system: 5 priority levels (P0 silent LCD badge → P4 interruptive TTS), delivery via LCD + LED + audio + TTS + web push. Notifications queued during active conversations (except P4). DND mode with quiet hours (P3→P1 during DND, P4 always delivers). |
 | DD-033 | System resilience and health monitoring | 2026-03-01 | HAL-level health monitoring service: NPU temp/CMM, CPU, RAM, storage, battery, network, systemd units — published on ZeroMQ bus. `GET /api/health` endpoint returns component status (healthy/degraded/critical), loaded models, uptime. Four-zone NPU thermal policy: normal (<65°C), warm (65-75°C log), throttle (75-85°C reduce speed), shutdown (>85°C emergency unload). systemd watchdog (30s heartbeat, auto-restart, max 3 in 5min). Graceful degradation matrix: NPU overheat → cool-down pause, all LLM fail → rule-based regex commands only, TTS fail → LCD text fallback, ASR fail → web UI text only, low battery → power saving → clean shutdown. Error UX: never raw errors to user, always human-readable, LCD always shows something even in catastrophic failure. |
+| DD-034 | Conversational clarification & repair | 2026-03-02 | Confidence-gated orchestrator responses: when classification confidence < threshold (default 0.6), ask "I think you want to [X]. Is that right?" instead of silently misrouting. Slot filling for missing action template parameters ("Which light?", "For how long?"). Disambiguation when multiple matches ("Kitchen or living room lights?"). Escalating repair ladder: rephrase → offer options → "Could you say it differently?" All clarification uses `quick` profile (Qwen3-0.6B) for minimal latency. Text-based sentiment awareness in system prompt (zero model cost): detect frustration cues, respond more concisely. Max 2 clarification rounds per user turn (configurable). |
+| DD-035 | External services integration (PIM) | 2026-03-02 | PTT voice interaction is fundamentally the same interaction pattern as messaging — users expect calendar, messaging, email, and task management. Calendar: CalDAV protocol (Radicale self-hosted, Google Calendar API, or HA calendar MCP); `calendar_query` cognitive tool gets real backend; new action templates `calendar_create` (Tier 1), `calendar_update`/`calendar_delete` (Tier 2). Messaging relay: ntfy (self-hosted), Pushover, or Matrix for push notifications to mobile. Email: IMAP read via `email_query` cognitive tool (Tier 0), SMTP send via `email_send` action template (Tier 2 — approval required). Task sync: CalDAV VTODO or Todoist API (optional). Service Adapter Protocol (Python `Protocol` class, same pattern as Model Provider Layer). All services config-driven, default disabled, API keys in `.env`. New super agent: `pim` (personal information management). Phase 2 (read), Phase 3 (write), Phase 5 (full bidirectional sync). |
+| DD-036 | A2A protocol support | 2026-03-02 | Google Agent2Agent protocol (v0.3, Linux Foundation, 150+ organizations). Complementary to MCP: MCP = tool/data access, A2A = agent-to-agent task delegation. Client (Phase 2): discover external agents via Agent Cards (JSON metadata), delegate tasks exceeding 1.7B capacity to more capable remote agents. Server (Phase 3): expose Cortex super agents as discoverable A2A agents, Agent Card at `/.well-known/agent.json`. JSON-RPC over HTTP/SSE — same FastAPI infrastructure as MCP server. Python `python-a2a` SDK. All incoming A2A tasks go through permission engine (Tier 2 by default). |
+| DD-037 | Wyoming protocol bridge | 2026-03-02 | Home Assistant's standard protocol for local voice satellites (JSONL over TCP). Cortex exposes SenseVoice as a Wyoming STT provider and Kokoro as a Wyoming TTS provider, enabling HA to use Cortex's NPU for voice processing. Optional satellite mode: HA orchestrates the Assist pipeline, Cortex provides audio I/O + local ASR/TTS. Python `wyoming` package (HA-maintained). Runs as optional systemd service alongside Cortex. Phase 5 alongside existing HA integration. |
+| DD-038 | Proactive intelligence engine | 2026-03-02 | System initiates interactions based on learned patterns rather than waiting for user input. Pattern detection from episodic memory + scheduling service + calendar. Time-of-day routines: morning briefing at learned wakeup time. Context-aware correlations: smart home events + reminders + calendar. Routine suggestions: "You check the weather every morning. Want me to include it automatically?" Scheduled idle-time "think" loop: single short LLM inference using `quick` profile (Qwen3-0.6B), zero cost when NPU is idle. Delivery via existing notification system (P1-P3 depending on urgency). Fully opt-in, configurable per-routine via web UI. Phase 4 (design), Phase 5 (implementation). |
+| DD-039 | Knowledge store & document RAG | 2026-03-02 | Sixth memory tier: ingested documents (manuals, references, personal notes, saved articles) chunked into ~200-token overlapping segments, embedded via same all-MiniLM-L6-v2 CPU pipeline, stored in sqlite-vec. `knowledge_search` cognitive tool (already defined) gets this as its real backend. With 4K context, RAG is MORE valuable than with large context windows — inject one high-relevance passage instead of hoping it fits. Ingestion: web UI upload or watched directory (`data/knowledge/`). Supported formats: txt, md, pdf, html. Capacity: configurable (default 100 documents). Phase 4. |
+| DD-040 | Power-aware operation profiles | 2026-03-02 | Four profiles: `mains` (full capability — Qwen3-1.7B, full polling, full brightness), `battery` (reduced — Qwen3-0.6B, half polling frequency, 50% brightness), `low_battery` (<15% — minimal polling, 30% brightness), `critical` (<5% — regex-only commands, no LLM inference, LCD text only). Auto-transition via Power Service ZeroMQ events based on PiSugar charging state. Model Router already supports profile switching (§4.3.5). Manual override via voice command. Phase 1 (design), Phase 2 (auto-switching implementation). |
+| DD-041 | NPU hardware abstraction | 2026-03-02 | NPU Service Protocol defined as Python `Protocol` class: `load_model`, `unload_model`, `infer`, `get_status`, `capabilities`. No AXCL-specific types at the interface level — all AXCL specifics isolated inside `AxclNpuService` implementation. Generic numpy array I/O for tensors. Enables future `HailoNpuService` (Raspberry Pi AI HAT+ 2, Hailo-10H, 40 TOPS, 2.5W) and `MockNpuService` (testing) without changing any higher-layer code. Design discipline enforced from Phase 1 when writing the NPU Service. |
 
-*Document version: 0.1.11 — User personas, voice interaction lifecycle, streaming pipeline, utility tools, scheduling, notifications, health monitoring*
+*Document version: 0.1.12 — External services (PIM), A2A/Wyoming protocols, conversational clarification, proactive intelligence, knowledge store, power profiles, NPU abstraction*
 *Status: DRAFT*

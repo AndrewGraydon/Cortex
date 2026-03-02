@@ -34,6 +34,23 @@ hal:
     low_battery_threshold: 15  # %
     critical_battery_threshold: 5  # %
     sleep_on_battery_idle: 300  # seconds
+    profiles:
+      mains:
+        llm_profile: chat  # Full Qwen3-1.7B
+        polling_multiplier: 1.0
+        display_brightness: 80
+      battery:
+        llm_profile: quick  # Qwen3-0.6B — reduced power
+        polling_multiplier: 2.0  # Half frequency
+        display_brightness: 50
+      low_battery:
+        llm_profile: quick
+        polling_multiplier: 4.0  # Quarter frequency
+        display_brightness: 30
+      critical:
+        llm_profile: null  # Regex-only, no LLM inference
+        polling_multiplier: 0  # Polling off
+        display_brightness: 10
 
 voice:
   activation_mode: button  # button (default — both Pi and Web UI)
@@ -211,7 +228,7 @@ agent:
     sandbox_max_memory_mb: 256
     sandbox_max_cpu_seconds: 30
   cognitive_tools:
-    enabled: [memory_query, knowledge_search, system_info, file_read, calendar_query]
+    enabled: [memory_query, knowledge_search, system_info, file_read, calendar_query, email_query, contact_lookup]
     # web_search and device_state enabled when network/IoT configured
   factory:
     enabled: false  # Enable in Phase 4
@@ -228,6 +245,26 @@ agent:
       # Exposed on FastAPI server (same host:port as web UI)
       expose_cognitive_tools: true
       expose_action_templates: true  # Respects permission tiers
+  a2a:
+    client:
+      enabled: false  # Enable in Phase 2
+      discovery_urls: []  # URLs to check for Agent Cards
+      connect_timeout: 5  # seconds
+      default_permission_tier: 2  # For discovered external agents
+    server:
+      enabled: false  # Enable in Phase 3
+      # Agent Card served at /.well-known/agent.json on FastAPI server
+      expose_agents: [general, home, research, pim, planner]
+
+clarification:
+  enabled: true
+  confidence_threshold: 0.6  # Below this, orchestrator requests clarification before routing
+  max_rounds: 2  # Max clarification exchanges per user turn
+  slot_filling:
+    enabled: true
+    model_profile: quick  # Use Qwen3-0.6B for fast slot-filling prompts
+  disambiguation:
+    max_options: 3  # "Did you mean X, Y, or Z?"
 
 security:
   tier_0_auto: true
@@ -276,6 +313,13 @@ memory:
   extraction:
     idle_timeout: 300  # Seconds of inactivity before post-session fact extraction
     regex_patterns: true  # Catch "remember that...", "my name is..." immediately
+  knowledge:
+    enabled: false  # Enable in Phase 4
+    watch_dir: data/knowledge  # Watched directory for document ingestion
+    chunk_size_tokens: 200
+    chunk_overlap_tokens: 50
+    max_documents: 100
+    supported_formats: [txt, md, pdf, html]
   encryption:
     enabled: true
     algorithm: aes-256-gcm
@@ -344,3 +388,79 @@ iot:
   homeassistant:
     url: ""  # e.g., http://homeassistant.local:8123
     token: ""  # Long-lived access token
+
+# --- External Services (PIM) ---
+# Calendar, messaging, email, and task integrations.
+# All services optional and disabled by default. API keys/passwords in .env.
+external_services:
+  calendar:
+    enabled: false
+    provider: caldav  # caldav, google, mcp
+    caldav:
+      url: ""  # e.g., http://localhost:5232 (Radicale self-hosted)
+      username: ""
+      # password in .env: CALDAV_PASSWORD
+    # google:
+    #   calendar_id: primary
+    #   # credentials in .env: GOOGLE_CALENDAR_CREDENTIALS
+  messaging:
+    enabled: false
+    provider: ntfy  # ntfy, pushover, matrix
+    ntfy:
+      server: "https://ntfy.sh"  # or self-hosted URL
+      default_topic: cortex
+      # token in .env: NTFY_TOKEN (optional for self-hosted)
+    # pushover:
+    #   # keys in .env: PUSHOVER_USER_KEY, PUSHOVER_APP_TOKEN
+    #   default_priority: 0  # -2 to 2
+    # matrix:
+    #   homeserver: ""
+    #   room_id: ""
+    #   # token in .env: MATRIX_ACCESS_TOKEN
+  email:
+    enabled: false
+    imap:
+      server: ""
+      port: 993
+      use_ssl: true
+      username: ""
+      # password in .env: EMAIL_PASSWORD
+    smtp:
+      server: ""
+      port: 587
+      use_tls: true
+      username: ""
+      from_address: ""
+      # password in .env: SMTP_PASSWORD
+  tasks:
+    enabled: false
+    provider: caldav_vtodo  # caldav_vtodo, todoist
+    # Todoist API key in .env: TODOIST_API_KEY
+
+# --- Wyoming Protocol Bridge ---
+# Expose Cortex's ASR/TTS to Home Assistant as Wyoming services.
+wyoming:
+  enabled: false  # Enable in Phase 5
+  stt:
+    enabled: true  # Expose SenseVoice as Wyoming STT provider
+    port: 10300
+  tts:
+    enabled: true  # Expose Kokoro as Wyoming TTS provider
+    port: 10200
+  satellite:
+    enabled: false  # Optional: act as Wyoming satellite (HA orchestrates)
+    ha_host: ""  # Home Assistant host for satellite mode
+
+# --- Proactive Intelligence ---
+# System-initiated interactions based on learned patterns and context.
+proactive:
+  enabled: false  # Enable in Phase 4-5
+  think_interval: 300  # Seconds between idle "think" loops
+  morning_briefing:
+    enabled: false
+    learned_time: true  # Learn wakeup time from episodic memory
+    fallback_time: "07:00"  # If no pattern detected yet
+    include: [weather, calendar, reminders]
+  routine_suggestions:
+    enabled: false
+    min_occurrences: 5  # Suggest automation after N detected repetitions
