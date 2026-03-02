@@ -35,13 +35,30 @@ def main(ctx: click.Context, config_path: Path | None, log_level: str | None) ->
 
 
 @main.command()
+@click.option("--mock/--no-mock", default=True, help="Use mock HAL services (default: mock).")
 @click.pass_context
-def run(ctx: click.Context) -> None:
+def run(ctx: click.Context, mock: bool) -> None:
     """Start the Cortex voice assistant."""
+    import asyncio
+
+    import structlog
+
     cfg = ctx.obj["config"]
-    click.echo(f"Starting Cortex (log_level={cfg.system.log_level})...")
-    # Phase 1: will launch core service here
-    click.echo("Not yet implemented — coming in Milestone 4.1")
+
+    structlog.configure(
+        processors=[
+            structlog.stdlib.add_log_level,
+            structlog.dev.ConsoleRenderer(),
+        ],
+        wrapper_class=structlog.stdlib.BoundLogger,
+        logger_factory=structlog.PrintLoggerFactory(),
+    )
+
+    click.echo(f"Starting Cortex (log_level={cfg.system.log_level}, mock={mock})...")
+
+    from cortex.core.service import run_cortex
+
+    asyncio.run(run_cortex(mock=mock))
 
 
 @main.command()
