@@ -184,13 +184,79 @@ axcl-smi  # Should show NPU with ~7040 MiB CMM
 
 ---
 
+## 0.4.1 Peripheral Verification
+
+After drivers are installed, verify each Whisplay peripheral individually before running full validation tests.
+
+### Speaker Output
+```bash
+# Play a test tone through Whisplay speaker
+speaker-test -D plughw:<CARD>,0 -t sine -f 440 -l 1
+# Or play a WAV file:
+aplay -D plughw:<CARD>,0 /usr/share/sounds/alsa/Front_Center.wav
+# Verify: audible sound from speaker
+```
+
+### LCD Display
+```bash
+cd ~/Whisplay/example
+# Run the Whisplay display test:
+sudo python3 display_test.py  # or equivalent from run_test.sh
+# Verify: visual output on 1.69" LCD (colored pattern, text, or image)
+# If no dedicated test script, verify LCD works during run_test.sh
+```
+
+### Button Input
+```bash
+python3 -c "
+import gpiod, time
+chip = gpiod.Chip('gpiochip4')
+line = chip.get_line(11)
+line.request(consumer='test', type=gpiod.LINE_REQ_DIR_IN)
+print('Press the button (Ctrl+C to exit)...')
+while True:
+    if line.get_value() == 0:  # Active low
+        print('Button PRESSED')
+    time.sleep(0.05)
+"
+# Verify: "Button PRESSED" appears on each press
+```
+
+### RGB LEDs
+```bash
+python3 -c "
+import gpiod, time
+chip = gpiod.Chip('gpiochip4')
+for pin, color in [(22, 'RED'), (18, 'GREEN'), (16, 'BLUE')]:
+    line = chip.get_line(pin)
+    line.request(consumer='test', type=gpiod.LINE_REQ_DIR_OUT)
+    line.set_value(1)
+    print(f'{color} on')
+    time.sleep(1)
+    line.set_value(0)
+print('LED test complete')
+"
+# Verify: LEDs cycle red → green → blue
+```
+
+---
+
 ## 0.5 Validation Tests
 
-### Test 1: Quick LLM (Qwen3-0.6B)
+### Test 1a: Quick LLM (Qwen3-0.6B)
 ```bash
 cd ~ && mkdir -p models && cd models
 git clone https://huggingface.co/M5Stack/Qwen3-0.6B-ax650 --depth 1
 # Run and record: tokens/sec, TTFT, NPU memory
+```
+
+### Test 1b: Primary LLM (Qwen3-1.7B)
+```bash
+cd ~/models
+git clone https://huggingface.co/AXERA-TECH/Qwen3-1.7B-w8a16-ax650 --depth 1
+# Run and record: tokens/sec, TTFT, NPU memory (CMM)
+# Expected: ~7.38 tok/s, ~3.3 GB CMM
+# Compare with 0.6B results from Test 1a
 ```
 
 ### Test 2: ASR (SenseVoice)
@@ -320,7 +386,11 @@ git clone https://huggingface.co/AXERA-TECH/Qwen3-VL-2B-ax650 --depth 1
 HARDWARE VALIDATION
 [ ] All components assembled, no bus conflicts
 [ ] NPU detected via lspci and axcl-smi
-[ ] Whisplay LCD, mic, speaker, buttons, LEDs all working
+[ ] Speaker produces audible output (speaker-test or aplay)
+[ ] LCD displays test pattern
+[ ] Button press detected on GPIO 11
+[ ] RGB LEDs cycle through red/green/blue
+[ ] Microphone captures audio (arecord)
 [ ] PiSugar reports battery and charging state
 [ ] CSI camera captures image (or SKIPPED if no camera)
 [ ] I2C stable under NPU load

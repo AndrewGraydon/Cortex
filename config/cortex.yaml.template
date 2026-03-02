@@ -249,7 +249,7 @@ agent:
       expose_action_templates: true  # Respects permission tiers
   a2a:
     client:
-      enabled: false  # Enable in Phase 2
+      enabled: false  # Enable in Phase 3
       discovery_urls: []  # URLs to check for Agent Cards
       connect_timeout: 5  # seconds
       default_permission_tier: 2  # For discovered external agents
