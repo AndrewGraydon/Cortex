@@ -1,5 +1,5 @@
 # Project Cortex — Agentic Local LLM Voice Assistant
-## System Design Scope Document v0.1.15
+## System Design Scope Document v0.1.16
 
 ---
 
@@ -341,8 +341,8 @@ Lightweight buffer on Pi 5 CPU that accumulates LLM output tokens and flushes on
 - **End flush:** When LLM generation completes, flush any remaining buffered tokens regardless of boundary
 - Simple state machine implementation — no NLP library, negligible CPU overhead.
 
-**Parallel TTS via NPU Model Multiplexing:**
-LLM (Qwen3-1.7B) and TTS (Kokoro-82M) are co-resident in NPU memory. While the LLM generates sentence 2, Kokoro synthesizes sentence 1. The AXCL runtime supports context-switching between co-resident models. Phase 0 testing must verify context-switch latency is acceptable.
+**Parallel TTS via NPU Model Multiplexing (confirmed DD-048):**
+LLM (Qwen3-1.7B) and TTS (Kokoro-82M) are co-resident in NPU memory. While the LLM generates sentence 2, Kokoro synthesizes sentence 1. Phase 1 investigation confirmed ~0ms context-switch overhead between co-resident models via pyaxengine (10 rounds alternating SenseVoice 128.6ms + Kokoro 18.6ms with negligible switch time). Full streaming pipeline is confirmed feasible.
 
 Audio chunks played sequentially with 10ms linear crossfade (NumPy on CPU) to prevent pops/clicks at sentence boundaries.
 
@@ -365,7 +365,7 @@ t=8.5s  Third sentence complete → synthesize → play seamlessly
 |---|---|---|---|
 | Mic input (ASR) | S16_LE mono PCM | 16,000 Hz | WM8960 codec, ALSA capture |
 | Kokoro TTS output | Float32 PCM | 24,000 Hz | Native Kokoro output rate |
-| Speaker output | S16_LE mono PCM | 24,000 Hz | WM8960 playback via ALSA |
+| Speaker output | S16_LE mono PCM | 24,000 Hz | WM8960 via ALSA `default` device (dmix resampling, DD-049) |
 | Web UI audio | Opus or PCM | 24,000 Hz | WebSocket binary frames or Web Audio API |
 
 **Latency Metrics (logged per voice interaction for profiling):**
@@ -378,7 +378,7 @@ t=8.5s  Third sentence complete → synthesize → play seamlessly
 | TTS chunk latency | < 300ms | Sentence text → audio chunk ready |
 | Inter-chunk gap | < 50ms | End of chunk N playback → start of chunk N+1 |
 
-**Fallback:** If Phase 0 testing shows NPU model context-switching is too slow for parallel operation, fall back to sequential mode: generate full LLM response, then synthesize and play all at once. TTFA degrades to ~7-10s but the system remains fully functional. Sequential mode is the pessimistic baseline; streaming is the optimistic target.
+**Fallback:** Sequential mode (generate full LLM response, then synthesize all at once, TTFA ~7-10s) remains available as fallback for error recovery. Phase 1 investigation confirmed NPU multiplexing works with ~0ms switch overhead (DD-048), so streaming is the primary mode.
 
 **NPU Memory Management Strategy:**
 - Default: all four primary models co-resident (~4.95 GB of 7 GB, ~2.09 GB headroom — measured Phase 0).
@@ -2047,6 +2047,10 @@ data/
 | DD-043 | Process & service architecture | 2026-03-02 | Single main process (`cortex-core.service`): Python asyncio/uvloop running FastAPI + agent framework + voice pipeline + scheduling + memory. Separate HAL processes: `cortex-npu.service` (AXCL runtime, requires dedicated process context), `cortex-audio.service` (ALSA), `cortex-display.service` (LCD + buttons + LEDs). Optional: `cortex-wyoming.service`. All IPC via ZeroMQ with JSON messages. Topic convention: `{service}.{event_type}`. gRPC/D-Bus rejected (DD-008 already chose ZeroMQ). |
 | DD-044 | Operational lifecycle (backup, update, migration) | 2026-03-02 | Deployment: `git clone` + `pip install -e .` in virtualenv, systemd units via `scripts/install-services.sh`. Updates: `scripts/update.sh` (git pull + pip install + restart). SQLite schema migration: numbered SQL files in `data/migrations/`, version check on startup (no Alembic — avoids SQLAlchemy dep). Backup: `scripts/backup.sh` archives `data/` + `config/` + `.env` (excludes `models/`). Restore: `scripts/restore.sh` with migration reconciliation. Logging: structlog JSON → stdout → systemd journal (journald handles rotation). |
 | DD-045 | FastVLM-0.5B replaces SmolVLM2-500M for vision | 2026-03-02 | Phase 0 testing: FastVLM-0.5B from AXERA-TECH catalog is dramatically better than SmolVLM2-500M. 6x faster image encoding than InternVL2.5-1B, competitive decode speed, excellent image descriptions in testing. 792 MiB CMM (vs estimated ~500MB for SmolVLM2). No C++ AXCL aarch64 binary — runs via Python pyaxengine on Pi host over PCIe. Total 4-model co-resident budget updated: ~4.95 GB with ~2.09 GB headroom (29.7%). DD-020 updated to reference FastVLM-0.5B. |
+| DD-046 | Mixed NPU invocation architecture | 2026-03-02 | Phase 1 investigation confirmed heterogeneous model invocation: **LLM (Qwen3)** uses C++ binary (`main_axcl_aarch64`) with separate tokenizer HTTP server (`qwen3_tokenizer_uid.py` on port 12345) — 28 per-layer axmodels + post axmodel + embeddings. **ASR (SenseVoice)** uses pyaxengine `InferenceSession` directly — single axmodel, one-shot inference. **TTS (Kokoro)** uses pyaxengine — 3 axmodel parts + 1 ONNX CPU vocoder. **VLM (FastVLM)** uses pyaxengine via `InferManager` — loads per-layer axmodels, manages KV caches in numpy, runs prefill+decode. FastVLM's `InferManager` proves pure-Python autoregressive LLM inference via pyaxengine is possible (future optimization path for LLM, eliminating C++ binary + tokenizer server). Phase 1: subprocess wrapping for LLM (proven, fast), pyaxengine for ASR/TTS/VLM. |
+| DD-047 | 2,047 token hard limit confirmed | 2026-03-02 | Phase 1 investigation: Qwen3-1.7B max sequence length is 2,047 tokens, hard-baked into compiled axmodel files. Tokenizer reports `model_max_length: 131072` (tokenizer capacity, not axmodel limit). C++ binary strings show `prefill_max_kv_cache_num_grp`, `prefill_max_token_num` as baked constants. FastVLM InferManager defaults to `max_seq_len=2047`. Qwen3 `config.json` is 0 bytes (no runtime override). Changing requires Pulsar2 recompile of all 28 layer axmodels. **Impact on context assembly:** ~1,200 tokens for system prompt + recent turns, ~800 tokens for generation. Rolling summary (DD-028) critical for coherence within this budget. |
+| DD-048 | NPU multiplexing confirmed (~0ms switch) | 2026-03-02 | Phase 1 investigation: co-resident models can be loaded and inferred concurrently via pyaxengine with negligible context-switch overhead. Tested 10 rounds alternating SenseVoice (avg 128.6ms) and Kokoro (avg 18.6ms) — switch overhead ~0ms. Confirms streaming voice pipeline (DD-031) is feasible: LLM generates sentence N+1 while TTS synthesizes sentence N. Sequential fallback mode no longer needed as primary path. |
+| DD-049 | Audio via sounddevice with ALSA default device | 2026-03-02 | Phase 1 investigation: Python `sounddevice` library works for both capture and playback on WM8960. **Capture:** 16kHz mono on `hw:0,0` works directly. **Playback:** WM8960 hardware supports 8k/16k/22.05k/32k/44.1k/48k Hz but NOT 24kHz natively. Kokoro TTS outputs at 24kHz. Solution: use ALSA `default` device for playback, which routes through dmix/plug resampler (transparent 24kHz → 48kHz upsampling). `alsaaudio` not needed — sounddevice sufficient. Latency acceptable for voice pipeline. |
 
-*Document version: 0.1.15 — Phase 0 measured benchmarks, FastVLM-0.5B replaces SmolVLM2-500M (DD-045)*
+*Document version: 0.1.16 — Phase 1 investigation results: NPU invocation, token limit, multiplexing, audio (DD-046 through DD-049)*
 *Status: DRAFT*

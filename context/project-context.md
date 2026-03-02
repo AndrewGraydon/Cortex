@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-03-02 (Session 13)
+# Last updated: 2026-03-02 (Session 14)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -79,7 +79,7 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-028 | Context assembly & memory system | Context Assembler builds prompts in priority order (system → request → tools → memories → summary → history). Rolling summary during TTS playback for 4K NPU coherence. 5 memory tiers with post-session LLM extraction. Automatic semantic retrieval (~20-40ms, CPU embedding) injects memories into prompts. all-MiniLM-L6-v2 + sqlite-vec. |
 | DD-029 | Qwen3-1.7B confirmed, 4B rejected | Phase 0 measured: 1.7B = 7.70 tok/s, 3,375 MiB CMM; 0.6B = 13.74 tok/s, 2,011 MiB. 4B = 3.65 tok/s, 6.2 GB (fills NPU, can't co-reside). 4B as future hot-swap only. AXERA-TECH catalog (149+ models). |
 | DD-030 | Voice interaction lifecycle | Session management (idle timeout, farewell detection), interruption handling (long-press stop, new-utterance replace), error recovery table (8 failure scenarios), confirmation feedback patterns, capability discovery (per-persona zero-LLM templates), system prompt persona guidelines |
-| DD-031 | Streaming voice pipeline | Sentence-boundary streaming with parallel TTS to mitigate 7.38 tok/s latency. Sentence detector buffers tokens until punctuation, Kokoro synthesizes in parallel via NPU multiplexing. TTFA target <5s. Sequential fallback if multiplexing fails. |
+| DD-031 | Streaming voice pipeline | Sentence-boundary streaming with parallel TTS to mitigate 7.70 tok/s latency. Sentence detector buffers tokens until punctuation, Kokoro synthesizes in parallel via NPU multiplexing (confirmed DD-048). TTFA target <5s. |
 | DD-032 | Utility tools, scheduling & notifications | 9 new cognitive tools (clock, calculator, weather, etc.), SQLite-backed scheduling service for timers/reminders (survives reboots), 5-level notification priority system (P0 silent → P4 interruptive) with DND mode and conversation-aware queueing |
 | DD-033 | System resilience & health monitoring | Health monitoring service (7 components, ZeroMQ bus), /api/health endpoint, 4-zone NPU thermal management, systemd watchdog, graceful degradation matrix (8 failure scenarios with defined UX), error UX principles |
 | DD-034 | Conversational clarification & repair | Confidence-gated orchestrator (threshold 0.6) triggers clarification instead of misrouting. Slot filling for missing parameters, disambiguation with 2-3 options, escalating repair ladder (rephrase → options → explicit help). Max 2 clarification rounds. Sentiment-aware adaptation via system prompt (zero model cost). |
@@ -94,6 +94,10 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-043 | Process & service architecture | Single main process (cortex-core.service, asyncio/uvloop) + separate HAL processes (cortex-npu, cortex-audio, cortex-display). All IPC via ZeroMQ (JSON, topic convention {service}.{event_type}). Minimizes RAM and IPC latency. |
 | DD-044 | Operational lifecycle | git clone + pip install deployment. Lightweight SQL migration system (numbered files, no Alembic). Backup/restore scripts (data/ + config/ + .env, excludes models/). structlog JSON → stdout → systemd journal. |
 | DD-045 | FastVLM-0.5B replaces SmolVLM2-500M | Phase 0 tested: 6x faster image encoding than InternVL2.5-1B, 792 MiB CMM, excellent descriptions. No C++ AXCL aarch64 binary — Python/pyaxengine path only. Total 4-model budget ~4.95 GB (29.7% headroom). |
+| DD-046 | Mixed NPU invocation architecture | LLM uses C++ binary (`main_axcl_aarch64`) + tokenizer HTTP server (port 12345). ASR/TTS/VLM use pyaxengine `InferenceSession` directly. FastVLM's `InferManager` proves pure-Python LLM inference possible (future optimization). |
+| DD-047 | 2,047 token hard limit confirmed | Baked into compiled axmodel. Tokenizer says 131K (irrelevant). config.json is 0 bytes. Requires Pulsar2 recompile to change. Context budget: ~1,200 input + ~800 generation tokens. |
+| DD-048 | NPU multiplexing confirmed (~0ms switch) | Co-resident models interleave with negligible overhead. Tested 10 rounds: SenseVoice 128.6ms + Kokoro 18.6ms alternating. Streaming pipeline (DD-031) confirmed feasible. |
+| DD-049 | Audio via sounddevice + ALSA default device | Capture: 16kHz on hw:0,0. Playback: WM8960 lacks native 24kHz — use ALSA `default` device (dmix resampler handles 24kHz→48kHz). sounddevice sufficient, alsaaudio not needed. |
 
 ## Architecture
 Seven-layer stack:
@@ -224,16 +228,16 @@ Cortex/
 
 - **Session 13 (2026-03-02):** Phase 1 implementation begun — completed Milestones 1.1, 1.2, and 2.1 (all dev-machine work). Created comprehensive Phase 1 plan covering 4 pre-code investigations + 15 milestones across 4 parts. **Milestone 1.1 (Scaffolding):** Updated pyproject.toml (sounddevice, click, pydantic-settings, pytest-cov, types-PyYAML, pre-commit, uvloop pi extra, CLI entry point, hardware marker). Created Makefile (dev/lint/format/test/test-hw/test-cov/clean), scripts/dev-setup.sh, .pre-commit-config.yaml. Created config.py (Pydantic models matching cortex.yaml.template with YAML loading and search path discovery). Created cli.py (Click: cortex run/config/version). Fixed build backend (setuptools.build_meta), added py.typed marker. **Milestone 1.2 (Types/Protocols):** hal/types.py (ModelHandle, InferenceInputs/Outputs, NpuStatus, NpuCapabilities, AudioData, AudioFormat, DisplayState, LedColor, ButtonGesture, ButtonEvent). hal/protocols.py (NpuService, AudioService, DisplayService, ButtonService — all runtime_checkable Protocols). voice/types.py (VoiceState, ASRResult, LLMChunk, TTSChunk, LatencyMetrics with computed properties, VoiceSession). ipc/messages.py (CortexMessage with JSON + ZeroMQ multipart serialization). ipc/bus.py (MessageBus wrapping pyzmq pub/sub with topic filtering). **Milestone 2.1 (MockNpuService):** hal/npu/mock.py — full NpuService Protocol implementation with Phase 0 measured timing (ASR 50ms, LLM 7.70 tok/s with 1s prefill, TTS RTF 0.115), streaming LLM token generation, memory tracking matching measured model sizes, configurable error injection (MockError). Full ASR→LLM→TTS pipeline cycle tested. **68 tests passing**, ruff + mypy strict clean. `make lint && make test` verified.
 
+- **Session 14 (2026-03-02):** Completed all four Pi hardware investigations (0A-0D). **Investigation 0A (NPU invocation):** Mixed architecture confirmed — LLM (Qwen3) uses C++ binary `main_axcl_aarch64` with separate tokenizer HTTP server on port 12345; ASR (SenseVoice) uses pyaxengine `InferenceSession` directly (single axmodel); TTS (Kokoro) uses pyaxengine (3 axmodel + 1 ONNX CPU vocoder); VLM (FastVLM) uses pyaxengine via `InferManager` (pure-Python autoregressive inference with per-layer axmodels and numpy KV caches — proves LLM via pyaxengine is possible as future optimization). DD-046. **Investigation 0B (token limit):** 2,047 tokens confirmed as hard limit baked into compiled axmodel. Tokenizer says 131,072 (tokenizer capacity, not axmodel). config.json is 0 bytes. FastVLM InferManager defaults max_seq_len=2047. Requires Pulsar2 recompile to change. Context assembly budget: ~1,200 tokens input, ~800 tokens generation. DD-047. **Investigation 0C (multiplexing):** NPU multiplexing confirmed working with ~0ms switch overhead. 10 rounds alternating SenseVoice (avg 128.6ms) and Kokoro (avg 18.6ms) — negligible context-switch time. Full streaming pipeline (DD-031) confirmed feasible. DD-048. **Investigation 0D (audio):** sounddevice works for both capture (16kHz on hw:0,0) and playback. WM8960 hardware doesn't support 24kHz natively (supported: 8k/16k/22.05k/32k/44.1k/48k). Solution: ALSA `default` device for playback handles 24kHz via dmix resampler. DD-049. Updated scope doc to v0.1.16 with DD-046 through DD-049. Updated streaming pipeline section with confirmed multiplexing results.
+
 ### NEXT SESSION — Resume Here
-**Topic:** Phase 1 continues. Investigations 0A-0D on Pi hardware, then HAL services.
-- **Investigation 0A (CRITICAL):** NPU model invocation strategy — can pyaxengine invoke all models, or must we wrap C++ binaries?
-- **Investigation 0B (HIGH):** Max token limit — is 2,047 configurable?
-- **Investigation 0C (MEDIUM):** NPU model multiplexing — can LLM and TTS interleave?
-- **Investigation 0D (MEDIUM):** ALSA audio from Python — sounddevice vs alsaaudio
-- **Milestone 2.2:** AxclNpuService (real NPU inference, depends on 0A)
-- **Milestone 2.3:** AudioService (mic capture + speaker playback, depends on 0D)
-- **Milestone 2.4:** DisplayService + ButtonService (LCD, gestures, LEDs)
+**Topic:** Phase 1 continues — HAL services and voice pipeline.
+- **Milestone 2.2:** AxclNpuService (real NPU inference — subprocess for LLM, pyaxengine for ASR/TTS/VLM per DD-046)
+- **Milestone 2.3:** AudioService (sounddevice, capture 16kHz hw:0,0, playback 24kHz via ALSA default per DD-049)
+- **Milestone 2.4:** DisplayService + ButtonService (LCD states, gesture state machine, LED PWM)
 - **Milestone 2.5:** ZeroMQ IPC + systemd units
+- **Milestones 3.1-3.4:** Voice pipeline (ASR → LLM → TTS → streaming)
+- **Milestones 4.1-4.4:** Integration, error handling, exit criteria verification
 
 ---
 
