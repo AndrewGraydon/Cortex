@@ -1,0 +1,20 @@
+[Unit]
+Description=Cortex Display Service (LCD + Button + LED)
+After=network.target
+PartOf=cortex.target
+
+[Service]
+Type=simple
+User=andrew
+Group=gpio
+WorkingDirectory=/home/andrew/Cortex
+ExecStart=/home/andrew/Cortex/.venv/bin/python -m cortex.hal.display.main
+Restart=on-failure
+RestartSec=5
+WatchdogSec=30
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=cortex.target

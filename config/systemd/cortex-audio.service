@@ -1,0 +1,20 @@
+[Unit]
+Description=Cortex Audio Service
+After=sound.target
+PartOf=cortex.target
+
+[Service]
+Type=simple
+User=andrew
+Group=audio
+WorkingDirectory=/home/andrew/Cortex
+ExecStart=/home/andrew/Cortex/.venv/bin/python -m cortex.hal.audio.main
+Restart=on-failure
+RestartSec=5
+WatchdogSec=30
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=cortex.target

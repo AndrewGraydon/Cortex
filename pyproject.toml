@@ -21,6 +21,8 @@ dependencies = [
     # Audio
     "numpy>=1.26.0",
     "sounddevice>=0.4.6",
+    # HTTP client (for LLM API subprocess communication)
+    "httpx>=0.25.0",
     # CLI
     "click>=8.1.0",
     # Utilities
@@ -49,6 +51,9 @@ pi = [
 
 [project.scripts]
 cortex = "cortex.cli:main"
+cortex-npu = "cortex.hal.npu.main:main"
+cortex-audio = "cortex.hal.audio.main:main"
+cortex-display = "cortex.hal.display.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -65,7 +70,7 @@ python_version = "3.11"
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["sounddevice.*", "zmq.*"]
+module = ["sounddevice.*", "zmq.*", "axengine.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

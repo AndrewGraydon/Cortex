@@ -1,0 +1,19 @@
+[Unit]
+Description=Cortex NPU Service
+After=network.target
+PartOf=cortex.target
+
+[Service]
+Type=simple
+User=andrew
+WorkingDirectory=/home/andrew/Cortex
+ExecStart=/home/andrew/Cortex/.venv/bin/python -m cortex.hal.npu.main
+Restart=on-failure
+RestartSec=5
+WatchdogSec=30
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=cortex.target

@@ -1,0 +1,6 @@
+[Unit]
+Description=Cortex Voice Assistant
+After=multi-user.target
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=Cortex Core Service (Voice Pipeline + Agent Framework)
+After=cortex-npu.service cortex-audio.service cortex-display.service
+Wants=cortex-npu.service cortex-audio.service cortex-display.service
+PartOf=cortex.target
+
+[Service]
+Type=simple
+User=andrew
+WorkingDirectory=/home/andrew/Cortex
+ExecStart=/home/andrew/Cortex/.venv/bin/cortex run
+Restart=on-failure
+RestartSec=5
+WatchdogSec=30
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=cortex.target
