@@ -303,11 +303,18 @@ arecord -D plughw:<CARD>,0 -f S16_LE -r 16000 -c 1 -d 5 test_mic.wav
 # Test at least 3 different voice IDs (e.g., af_heart, am_adam, bf_emma)
 ```
 
-### Test 8: Vision Model (SmolVLM2-500M)
+### Test 8: Vision Model (FastVLM-0.5B)
 ```bash
-git clone https://huggingface.co/AXERA-TECH/SmolVLM2-500M-ax650 --depth 1
-# Load SmolVLM2-500M on NPU
-# Feed test image (any JPEG/PNG with identifiable objects)
+# Download from AXERA-TECH HuggingFace (replaces SmolVLM2-500M — see DD-045)
+hf download AXERA-TECH/FastVLM-0.5B --local-dir ~/models/FastVLM-0.5B
+# Requires pyaxengine (pip install axengine wheel from AXERA-TECH GitHub)
+# Run via Python (no AXCL aarch64 C++ binary available):
+cd ~/models/FastVLM-0.5B
+python3 infer_axmodel_650.py \
+  -v ./fastvlm_C128_CTX1024_P640_ax650/image_encoder_512x512_0.5b_ax650.axmodel \
+  -m ./fastvlm_C128_CTX1024_P640_ax650 \
+  -t fastvlm_tokenizer -i 512
+# Interactive: enter image path, then 'q' to quit
 # Record: inference time, description quality, NPU memory usage
 ```
 
@@ -340,8 +347,8 @@ These are research questions, not pass/fail tests. Document findings for each.
 # If supported: measure tok/s improvement and verify output quality
 # Expected result: likely NOT supported (AXCL is inference-only, not training-aware)
 ```
-**Result:** supported / not supported / partially supported
-**Notes:** ___
+**Result:** not supported
+**Notes:** `main_axcl_aarch64` binary has no `--draft_model` parameter. Each model loads all layers from a single template. No AXCL API for draft/verify pattern. `--devices` flag is for data parallelism across NPU cards, not speculative decoding.
 
 ### Investigation 2: Constrained Generation
 **Question:** Does AXCL support grammar-guided or logit-biased decoding for structured tool call output?
@@ -351,8 +358,8 @@ These are research questions, not pass/fail tests. Document findings for each.
 # Alternative: test if output can be constrained via stop tokens
 # Expected result: limited (stop tokens likely, full grammar unlikely)
 ```
-**Result:** full grammar / logit bias only / stop tokens only / not supported
-**Notes:** ___
+**Result:** stop tokens only
+**Notes:** `post_config.json` supports temperature, top_p, top_k, repetition_penalty (sampling params only). No grammar or logit_bias parameters in the binary. Default is top_k=1 (greedy). Tool calling will rely on system prompt (Hermes template) + post-generation output parsing. The `axllm` binary (newer, from ax-llm repo) offers OpenAI-compatible API that may support stop sequences.
 
 ### Investigation 3: Moonshine ASR
 **Question:** Is Moonshine Tiny (26MB) a viable complement to SenseVoice for streaming partial transcription?
@@ -362,8 +369,8 @@ pip install moonshine-onnx
 # Compare: WER vs SenseVoice, latency profile, streaming capability
 # Key question: can it provide partial results while button is held?
 ```
-**Result:** viable complement / not competitive / interesting but not needed
-**Notes:** ___
+**Result:** not needed
+**Notes:** No .axmodel exists for Moonshine on AX650N. SenseVoice already achieves RTF 0.028 on NPU with WER 0.02. SenseVoice also has `streaming_sensevoice.axmodel` for streaming partial transcription. Running Moonshine on CPU would be slower and less accurate than SenseVoice on NPU.
 
 ### Investigation 4: Unified Multimodal (Qwen3-VL-2B)
 **Question:** Can Qwen3-VL-2B replace both Qwen3-1.7B (LLM) and SmolVLM2-500M (VLM) as a single model?
@@ -375,8 +382,8 @@ git clone https://huggingface.co/AXERA-TECH/Qwen3-VL-2B-ax650 --depth 1
 #   Same test images, compare description quality
 # Note: 7.80 tok/s, 3.7 GB — fits but uses more memory than 1.7B
 ```
-**Result:** viable replacement / text inferior / vision inferior / memory concern
-**Notes:** ___
+**Result:** not needed (separate models more flexible)
+**Notes:** Qwen3-1.7B (3375 MiB) + FastVLM-0.5B (792 MiB) = 4167 MiB total. Qwen3-VL-2B would be ~3700 MiB but loses architectural flexibility: can't run text-only at dedicated speed, can't use Qwen3-0.6B as fast classifier, can't load/unload models independently. GPTQ-Int4 variant also available (lower memory) but same flexibility tradeoff. AXERA-TECH has Qwen3-VL-2B-Instruct and GPTQ-Int4 on HuggingFace if revisited later.
 
 ---
 
@@ -384,52 +391,179 @@ git clone https://huggingface.co/AXERA-TECH/Qwen3-VL-2B-ax650 --depth 1
 
 ```
 HARDWARE VALIDATION
-[ ] All components assembled, no bus conflicts
-[ ] NPU detected via lspci and axcl-smi
-[ ] Speaker produces audible output (speaker-test or aplay)
-[ ] LCD displays test pattern
-[ ] Button press detected on GPIO 11
-[ ] RGB LEDs cycle through red/green/blue
-[ ] Microphone captures audio (arecord)
-[ ] PiSugar reports battery and charging state
-[ ] CSI camera captures image (or SKIPPED if no camera)
-[ ] I2C stable under NPU load
+[x] All components assembled, no bus conflicts (PiSugar not connected — see notes)
+[x] NPU detected via lspci and axcl-smi (AX650N, firmware V3.6.4)
+[x] Speaker produces audible output (speaker-test 440Hz + aplay WAV)
+[x] LCD displays test pattern (240x280 ST7789, SPI0, color cycling verified)
+[x] Button press detected on pin 11 (BOARD numbering, active-HIGH via RPi.GPIO)
+[x] RGB LEDs cycle through red/green/blue (PWM via pins 22/18/16 BOARD)
+[x] Microphone captures audio (arecord 16kHz stereo via hw:wm8960soundcard)
+[ ] PiSugar reports battery and charging state — NOT CONNECTED (pogo pins not in contact)
+[ ] CSI camera captures image — SKIPPED (no camera attached)
+[x] I2C stable under NPU load (0x1a=WM8960 UU, 0x40=Whisplay component)
 
-NPU METRICS (fill in actual values)
-Total CMM:              _______ MiB
-SenseVoice size:        _______ MiB
-Qwen3-1.7B size:        _______ MiB
-Kokoro-82M size:        _______ MiB (expected ~237 MiB)
-SmolVLM2-500M size:     _______ MiB (expected ~500 MiB)
-All 4 co-resident:      YES / NO (total: _______ MiB, expected ~4750 MiB)
-Qwen3-0.6B tok/s:       _______
-Qwen3-1.7B tok/s:       _______
-SmolVLM2-500M inf time:  _______ ms
-SenseVoice RTF:          _______
-Kokoro RTF:              _______ (expected ~0.067)
-Kokoro audio quality:    GOOD / ACCEPTABLE / POOR
-NPU idle temp:           _______°C
-NPU load temp:           _______°C
+NPU METRICS (measured 2026-03-02)
+Total CMM:              7040 MiB
+SenseVoice size:        251 MiB (CMM during operation)
+Qwen3-1.7B size:        3375 MiB (CMM including 2047-token KV cache)
+Kokoro-82M size:        232 MiB (CMM during operation)
+FastVLM-0.5B size:      792 MiB (CMM, weights only; +~300 MiB with KV cache)
+All 4 co-resident:      YES (estimated total: ~4950 MiB, headroom: ~2090 MiB / 29.7%)
+Qwen3-0.6B tok/s:       13.74
+Qwen3-1.7B tok/s:       7.70
+FastVLM-0.5B:           ~35 tok/s decode, ~60ms image encode (from AXERA benchmarks)
+SenseVoice RTF:          0.028 (C++ AXCL aarch64 binary)
+Kokoro RTF:              0.115 (Python), 0.067 (C++ — no aarch64 AXCL binary yet)
+Kokoro audio quality:    GOOD (24kHz mono, natural voice, intelligible)
+NPU idle temp:           41°C
+NPU load temp:           50°C (during LLM inference)
 
 POWER METRICS
-Battery capacity:    _______ mAh
-Active drain:        _______% / min → _______ min runtime
-Idle drain:          _______% / min → _______ min runtime
-Under-voltage:       YES / NO
-Stable under load:   YES / NO
+Battery capacity:    N/A — PiSugar not connected
+Active drain:        N/A
+Idle drain:          N/A
+Under-voltage:       NO (mains powered via NPU adapter)
+Stable under load:   YES
 
 INVESTIGATIONS
-Speculative decoding:     supported / not supported / partial
-Constrained generation:   full grammar / logit bias / stop tokens / not supported
-Moonshine ASR:            viable / not competitive / not needed
-Unified multimodal (VL-2B): viable / text inferior / vision inferior / memory issue
+Speculative decoding:     not supported (no draft_model in binary)
+Constrained generation:   stop tokens only (post_config.json: temp/top_p/top_k/rep_penalty)
+Moonshine ASR:            not needed (SenseVoice has streaming_sensevoice.axmodel on NPU)
+Unified multimodal (VL-2B): not needed (separate models more flexible, ~4167 MiB combined)
 
 SYSTEM
-OS:                  _______
-Kernel:              _______
-AXCL driver:         _______
-Python:              _______
-Free disk:           _______ GB
+OS:                  Debian 12 Bookworm (Raspberry Pi OS 64-bit)
+Kernel:              6.12.62+rpt-rpi-2712
+AXCL driver:         V3.6.4 (axclhost v3.6.5 package, 6 DKMS kernel modules)
+Python:              3.11.2
+Free disk:           ~44 GB (after model downloads)
+```
+
+---
+
+## 0.8 Model Setup Notes (Tested 2026-03-02)
+
+Detailed setup instructions for each model, including gotchas discovered during Phase 0.
+
+### AXCL Runtime (required by all models)
+
+```bash
+# Single package installs driver + tools (NOT axcl-smi / axcl-run separately)
+sudo apt install axclhost
+# Builds 6 kernel modules via DKMS: axcl_host, ax_pcie_host_dev, ax_pcie_mmb,
+#   ax_pcie_msg, ax_pcie_net_host, ax_pcie_p2p_rc
+# After install, must run: source /etc/profile
+# Tools installed to /usr/bin/axcl/ (axcl-smi, axcl_run_model, etc.)
+# Verify: axcl-smi → should show AX650N with 7040 MiB CMM
+```
+
+### Python Environment
+
+```bash
+# Bookworm uses PEP 668 (externally-managed-environment)
+# System packages via apt:
+sudo apt install python3-pil python3-pygame python3-rpi-lgpio python3-spidev
+# Model-specific packages in a venv:
+python3 -m venv ~/.venvs/axllm
+source ~/.venvs/axllm/bin/activate
+pip install transformers jinja2 huggingface_hub  # for LLM tokenizer server
+pip install axengine  # from AXERA-TECH GitHub releases (pyaxengine)
+# HuggingFace CLI is now 'hf' (not 'huggingface-cli')
+```
+
+### Qwen3-0.6B / Qwen3-1.7B (LLM)
+
+```bash
+# Download models
+hf download AXERA-TECH/Qwen3-0.6B --local-dir ~/models/Qwen3-0.6B
+hf download AXERA-TECH/Qwen3-1.7B --local-dir ~/models/Qwen3-1.7B
+chmod +x ~/models/Qwen3-*/main_axcl_aarch64
+
+# GOTCHA: Requires separate tokenizer HTTP server on port 12345
+cd ~/models/Qwen3-0.6B  # or Qwen3-1.7B — tokenizer is the same
+~/.venvs/axllm/bin/python qwen3_tokenizer_uid.py --port 12345 &
+# Then run the model:
+bash run_qwen3_0.6b_int8_ctx_axcl_aarch64.sh
+
+# Key parameters differ between 0.6B and 1.7B:
+#   0.6B: tokens_embed_size=1024, axmodel_num=28
+#   1.7B: tokens_embed_size=2048, axmodel_num=28
+# Model load: ~23s (0.6B), ~43s (1.7B). Interactive prompt loop.
+```
+
+### SenseVoice ASR
+
+```bash
+hf download AXERA-TECH/SenseVoice --local-dir ~/models/SenseVoice
+chmod +x ~/models/SenseVoice/cpp/axcl_aarch64/main
+
+# C++ AXCL binary (fastest, no Python deps needed):
+cd ~/models/SenseVoice
+LD_LIBRARY_PATH=cpp/axcl_aarch64 ./cpp/axcl_aarch64/main \
+  -a example/en.mp3 -t sensevoice -p sensevoice_ax650 -l en
+# Supports: wav, mp3. Languages: en, zh, ja, ko, yue, auto
+
+# GOTCHA: Python path requires PyTorch (heavy). Use C++ binary instead.
+# GOTCHA: Streaming model exists (streaming_sensevoice.axmodel) but
+#   only the offline binary is pre-compiled for AXCL aarch64.
+```
+
+### Kokoro-82M TTS
+
+```bash
+hf download AXERA-TECH/Kokoro --local-dir ~/models/Kokoro
+
+# Python path (AXCL via pyaxengine):
+pip install kokoro soundfile 'misaki[en]' onnxruntime ordered_set scipy \
+  pypinyin cn2an jieba pyopenjtalk 'fugashi[unidic-lite]' jaconv mojimoji Pillow
+python -m spacy download en_core_web_sm
+
+# GOTCHA: Voice files must be .npy format (not .pt) for the AXERA inference code.
+# Convert: python3 -c "import torch, numpy as np; \
+#   v = torch.load('checkpoints/voices/af_heart.pt', weights_only=True); \
+#   np.save('checkpoints/voices/af_heart.npy', v.numpy())"
+
+cd ~/models/Kokoro
+python3 kokoro_ax.py --text 'Hello world' --lang en \
+  --voice checkpoints/voices/af_heart.npy --output out.wav -d models
+
+# GOTCHA: No C++ AXCL aarch64 binary. C++ binaries are for AX650 native only.
+#   Python RTF: 0.115. C++ (native AX650): 0.067. Phase 1 may need native build.
+# GOTCHA: Init takes ~9s (loading 3 NPU models + 1 CPU ONNX vocoder).
+```
+
+### FastVLM-0.5B (VLM)
+
+```bash
+hf download AXERA-TECH/FastVLM-0.5B --local-dir ~/models/FastVLM-0.5B
+pip install Pillow  # needed in venv
+
+# GOTCHA: No main_axcl_aarch64 binary. Only main_ax650 (native) and main_axcl_x86.
+# Must use Python inference via pyaxengine:
+cd ~/models/FastVLM-0.5B
+python3 infer_axmodel_650.py \
+  -v ./fastvlm_C128_CTX1024_P640_ax650/image_encoder_512x512_0.5b_ax650.axmodel \
+  -m ./fastvlm_C128_CTX1024_P640_ax650 \
+  -t fastvlm_tokenizer -i 512
+# Interactive: enter image file path, get description. 'q' to quit.
+
+# GOTCHA: Replaces SmolVLM2-500M from original scope doc (DD-045).
+#   FastVLM-0.5B: 792 MiB CMM, 6x faster image encoding, better memory efficiency.
+# GOTCHA: fastvlm_tokenizer requires trust_remote_code=True in transformers.
+```
+
+### Whisplay HAT (LCD/Button/LEDs/Audio)
+
+```bash
+# Driver at ~/Whisplay/Driver/WhisPlay.py
+# GOTCHA: Uses RPi.GPIO with BOARD pin numbering (not BCM, not gpiod)
+#   Physical pin 11 = button (active-HIGH: pressed=1, released=0)
+#   Physical pin 22/18/16 = RGB LEDs (PWM, active-low: 0=on, 255=off)
+#   Physical pin 15 = LCD backlight, pin 13 = DC, pin 7 = RST
+# GOTCHA: python3-rpi-lgpio (lgpio compatibility shim) has cosmetic PWM
+#   cleanup bug — TypeError in __del__. Non-blocking, ignore it.
+# LCD: 240x280 ST7789 via SPI0 at 100MHz. RGB565 pixel format.
+# Audio: WM8960 codec at card 0. Speaker + mic on same I2S bus.
 ```
 
 ---

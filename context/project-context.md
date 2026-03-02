@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-03-02 (Session 11)
+# Last updated: 2026-03-02 (Session 12)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -28,19 +28,22 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 
 ### NPU Supported Models (confirmed)
 - **LLM:** Qwen3-0.6B, Qwen3-1.7B, Qwen2.5-0.5B/1.5B-Instruct, DeepSeek-R1-Distill-Qwen-1.5B, MiniCPM4-0.5B
-- **Multimodal:** InternVL3-1B, Qwen2.5-VL-3B-Instruct, SmolVLM2-500M
+- **Multimodal:** InternVL3-1B, Qwen2.5-VL-3B-Instruct, FastVLM-0.5B (selected, DD-045), SmolVLM2-500M
 - **ASR:** Whisper, SenseVoice
 - **TTS:** Kokoro-82M (selected), MeloTTS, CosyVoice2
 - **Vision:** YOLO11, Depth-Anything-V2, Real-ESRGAN
 - **Other:** CLIP, 3D-Speaker-MT, LivePortrait, Stable Diffusion 1.5
 
-### NPU Performance (confirmed benchmarks on M.2 + Pi 5)
-- Qwen3-0.6B (w8a16): 12.88 tok/s, ~2.0 GB CMM
-- Qwen3-1.7B (w8a16): **7.38 tok/s**, ~3.3 GB CMM, ~4K context
-- Qwen3-4B (w8a16): 3.65 tok/s, ~6.2 GB CMM (691 MB remaining — can't co-reside), max 2,559 tokens
-- Qwen3-VL-2B (w8a16): 7.80 tok/s, ~3.7 GB CMM
-- SenseVoice RTF: ~0.015 (67x faster than real-time)
-- Source: [AXERA-TECH HuggingFace](https://huggingface.co/AXERA-TECH) (148 models total), [M5Stack NPU Benchmark](https://docs.m5stack.com/en/guide/ai_accelerator/llm-8850/m5_llm_8850_npu_benchmark)
+### NPU Performance (Phase 0 measured on M.2 + Pi 5, AXCL v3.6.5)
+- Qwen3-0.6B (w8a16): **13.74 tok/s**, 2,011 MiB CMM (includes KV cache for 2,047 tokens)
+- Qwen3-1.7B (w8a16): **7.70 tok/s**, 3,375 MiB CMM, 2,047 max tokens
+- Qwen3-4B (w8a16): 3.65 tok/s, ~6.2 GB CMM (691 MB remaining — can't co-reside), max 2,559 tokens (vendor benchmark)
+- Qwen3-VL-2B (w8a16): 7.80 tok/s, ~3.7 GB CMM (vendor benchmark)
+- SenseVoice RTF: **0.028** (36x faster than real-time), 251 MiB CMM
+- Kokoro-82M RTF: **0.115** (9x real-time, Python/pyaxengine path), 232 MiB CMM
+- FastVLM-0.5B: 792 MiB CMM, excellent image descriptions (Python/pyaxengine path)
+- **Total 4-model co-resident budget: ~4.95 GB of 7.04 GB (29.7% headroom)**
+- Source: [AXERA-TECH HuggingFace](https://huggingface.co/AXERA-TECH) (149+ models total), [M5Stack NPU Benchmark](https://docs.m5stack.com/en/guide/ai_accelerator/llm-8850/m5_llm_8850_npu_benchmark)
 
 ## Design Decisions Made
 
@@ -50,13 +53,13 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-002 | Local-first with optional secure external | Privacy + flexibility |
 | DD-003 | 4-tier permission model | Tiered autonomy: safe=auto, risky=approval |
 | DD-004 | General-purpose assistant | No premature domain optimization |
-| DD-005 | Qwen3-1.7B primary model | Confirmed: 7.38 tok/s, 3.3 GB CMM, 4K context. Qwen3-4B rejected (3.65 tok/s, 6.2 GB fills NPU). See DD-029. |
+| DD-005 | Qwen3-1.7B primary model | Measured Phase 0: 7.70 tok/s, 3,375 MiB CMM. Qwen3-4B rejected (3.65 tok/s, 6.2 GB fills NPU). See DD-029. |
 | DD-006 | FastAPI + HTMX for web UI | Lightweight, async, server-driven |
 | DD-007 | SQLite + sqlite-vec for memory | No separate DB server, vector search support |
 | DD-008 | ZeroMQ for IPC | Fast, brokerless, simple |
 | DD-009 | bubblewrap for sandboxing | Lightweight, no daemon, fine-grained |
 | DD-010 | systemd for service management | Standard, watchdog, dependencies |
-| DD-011 | Kokoro-82M as TTS engine | 2x faster than MeloTTS on NPU, #1 TTS Arena quality, 237MB NPU, already proven on LLM-8850 |
+| DD-011 | Kokoro-82M as TTS engine | RTF 0.115 (Python path, measured), 232 MiB CMM; #1 TTS Arena quality, already proven on LLM-8850. No C++ AXCL aarch64 binary — Python/pyaxengine required. |
 | DD-012 | Adapt whisplay-ai-chatbot for LCD | Proven Pillow+cairosvg renderer on this hardware; 30 FPS, SVG emoji, smooth scrolling |
 | DD-013 | Defer web UI framework to Phase 3 | Voice-first; evaluate HTMX+DaisyUI vs NiceGUI vs Svelte later |
 | DD-014 | Custom Python action engine | Zero RAM, in-process, YAML templates + Python handlers; n8n/Node-RED/Temporal too heavy |
@@ -65,7 +68,7 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-017 | Qwen-Agent as library only | NousFnCallPrompt for Qwen3-native tool-call parsing |
 | DD-018 | Custom framework over CrewAI/LangGraph/AutoGen | All too heavy/bloated for Pi 5 + 1.7B model constraints |
 | DD-019 | MCP protocol support (client + server) | Standard tool interop; external tools mapped to cognitive tools or action templates with permission gating |
-| DD-020 | Tiered VLM vision system | SmolVLM2-500M always resident; hot-swap to InternVL3-1B/Qwen2.5-VL-3B for detail; camera + webcam + upload |
+| DD-020 | Tiered VLM vision system | FastVLM-0.5B always resident (792 MiB, DD-045); hot-swap to InternVL3-1B/Qwen2.5-VL-3B for detail; camera + webcam + upload |
 | DD-021 | Button-first interaction with Web UI parity | Physical Pi uses Whisplay button (GPIO 11) as sole input via gestures (hold/double-click/single-click/long-press/triple-click); no VAD anywhere; Web UI has full parity via software equivalents |
 | DD-022 | Configurable model provider layer | All model interactions via provider-agnostic Protocol interfaces; 7 providers (axcl, openai, anthropic, google, xai, ollama, openai_compatible); per-profile provider chains with fallback; tool calling auto-adapted; default offline, cloud opt-in |
 | DD-023 | SenseVoice-Small as ASR engine | Non-autoregressive (single-pass) — 50-75ms per utterance vs Whisper-Small 800-1800ms (autoregressive). 10-20x faster on same NPU. Comparable accuracy for English. Faster Whisper can't use NPU (CPU-only via CTranslate2). Both to be tested Phase 0. |
@@ -74,14 +77,14 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-026 | Provider-managed context | No centralized context budget scaling. Each provider knows its own limits; agent framework passes full ideal prompt, provider handles truncation. Simplifies architecture. |
 | DD-027 | Tool development pipeline | Structured lifecycle: Specify → Develop → Review → Approve → Deploy. Tools start at Tier 2, promote after supervised use. Sandbox testing, version control, rollback. |
 | DD-028 | Context assembly & memory system | Context Assembler builds prompts in priority order (system → request → tools → memories → summary → history). Rolling summary during TTS playback for 4K NPU coherence. 5 memory tiers with post-session LLM extraction. Automatic semantic retrieval (~20-40ms, CPU embedding) injects memories into prompts. all-MiniLM-L6-v2 + sqlite-vec. |
-| DD-029 | Qwen3-1.7B confirmed, 4B rejected | Confirmed benchmarks: 1.7B = 7.38 tok/s, 3.3 GB CMM. 4B = 3.65 tok/s, 6.2 GB (fills NPU, can't co-reside with anything). 4B as future hot-swap only. AXERA-TECH catalog (148 models) noted for Phase 0 evaluation. |
+| DD-029 | Qwen3-1.7B confirmed, 4B rejected | Phase 0 measured: 1.7B = 7.70 tok/s, 3,375 MiB CMM; 0.6B = 13.74 tok/s, 2,011 MiB. 4B = 3.65 tok/s, 6.2 GB (fills NPU, can't co-reside). 4B as future hot-swap only. AXERA-TECH catalog (149+ models). |
 | DD-030 | Voice interaction lifecycle | Session management (idle timeout, farewell detection), interruption handling (long-press stop, new-utterance replace), error recovery table (8 failure scenarios), confirmation feedback patterns, capability discovery (per-persona zero-LLM templates), system prompt persona guidelines |
 | DD-031 | Streaming voice pipeline | Sentence-boundary streaming with parallel TTS to mitigate 7.38 tok/s latency. Sentence detector buffers tokens until punctuation, Kokoro synthesizes in parallel via NPU multiplexing. TTFA target <5s. Sequential fallback if multiplexing fails. |
 | DD-032 | Utility tools, scheduling & notifications | 9 new cognitive tools (clock, calculator, weather, etc.), SQLite-backed scheduling service for timers/reminders (survives reboots), 5-level notification priority system (P0 silent → P4 interruptive) with DND mode and conversation-aware queueing |
 | DD-033 | System resilience & health monitoring | Health monitoring service (7 components, ZeroMQ bus), /api/health endpoint, 4-zone NPU thermal management, systemd watchdog, graceful degradation matrix (8 failure scenarios with defined UX), error UX principles |
 | DD-034 | Conversational clarification & repair | Confidence-gated orchestrator (threshold 0.6) triggers clarification instead of misrouting. Slot filling for missing parameters, disambiguation with 2-3 options, escalating repair ladder (rephrase → options → explicit help). Max 2 clarification rounds. Sentiment-aware adaptation via system prompt (zero model cost). |
-| DD-035 | External services integration (PIM) | PTT voice = messaging pattern — users expect calendar, messaging, email, tasks. CalDAV calendar backend (calendar_query gets real backend + calendar_create), ntfy/Pushover/Matrix messaging relay, IMAP/SMTP email, CalDAV VTODO/Todoist task sync. Service Adapter Protocol (same pattern as Model Provider). New `pim` super agent + `pim_dispatcher` utility agent. Phase 2 read-only, Phase 3 write, Phase 5 full sync. |
-| DD-036 | A2A protocol support | Google Agent2Agent protocol (v0.3, Linux Foundation). Complementary to MCP: MCP = tool/data access, A2A = agent-to-agent task delegation. Client (Phase 2): discover external agents via Agent Cards, delegate tasks. Server (Phase 3): expose Cortex super agents via Agent Card. JSON-RPC over HTTP/SSE, python-a2a SDK. |
+| DD-035 | External services integration (PIM) | PTT voice = messaging pattern — users expect calendar, messaging, email, tasks. CalDAV calendar backend, ntfy/Pushover/Matrix messaging relay, IMAP/SMTP email, CalDAV VTODO/Todoist task sync. Service Adapter Protocol. New `pim` super agent. Phase 3 read+write, Phase 5 full bidirectional sync. |
+| DD-036 | A2A protocol support | Google Agent2Agent protocol (v0.3, Linux Foundation). Complementary to MCP: MCP = tool/data access, A2A = agent-to-agent task delegation. Client + Server (Phase 3): discover external agents via Agent Cards, expose Cortex super agents. JSON-RPC over HTTP/SSE, python-a2a SDK. |
 | DD-037 | Wyoming protocol bridge | Home Assistant's standard for local voice satellites (JSONL over TCP). Three modes: STT Provider (SenseVoice), TTS Provider (Kokoro), Satellite (optional, HA orchestrates). Python `wyoming` package. Phase 5. |
 | DD-038 | Proactive intelligence engine | Pattern detection from episodic memory + scheduling + calendar. Time-of-day routines (morning briefing at learned wakeup time), context-aware connections, routine suggestions. Idle-time "think" loop using Qwen3-0.6B. Fully opt-in, per-routine configurable. Phase 4 design, Phase 5 implementation. |
 | DD-039 | Knowledge store & document RAG | Sixth memory tier: Knowledge Store (SQLite + sqlite-vec, persistent). Document ingestion via web UI upload or watched directory. ~200-token chunks with 50-token overlap, same all-MiniLM-L6-v2 embedding. knowledge_search tool gets real backend. Supported formats: txt, md, pdf, html. Phase 4. |
@@ -90,6 +93,7 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-042 | Web authentication & session management | Phase 1-2: no auth on LAN. Phase 3: bcrypt password + HTTP-only session cookie. Phase 3+: HTTPS (Caddy) + optional TOTP 2FA. Server-side sessions in SQLite. Persona mapping via auth state. No JWT/OAuth (overkill for single-user). |
 | DD-043 | Process & service architecture | Single main process (cortex-core.service, asyncio/uvloop) + separate HAL processes (cortex-npu, cortex-audio, cortex-display). All IPC via ZeroMQ (JSON, topic convention {service}.{event_type}). Minimizes RAM and IPC latency. |
 | DD-044 | Operational lifecycle | git clone + pip install deployment. Lightweight SQL migration system (numbered files, no Alembic). Backup/restore scripts (data/ + config/ + .env, excludes models/). structlog JSON → stdout → systemd journal. |
+| DD-045 | FastVLM-0.5B replaces SmolVLM2-500M | Phase 0 tested: 6x faster image encoding than InternVL2.5-1B, 792 MiB CMM, excellent descriptions. No C++ AXCL aarch64 binary — Python/pyaxengine path only. Total 4-model budget ~4.95 GB (29.7% headroom). |
 
 ## Architecture
 Seven-layer stack:
@@ -118,9 +122,9 @@ Seven-layer stack:
 - Whisplay HAT uses GPIO header (top), SPI for LCD, I2S/I2C for audio
 - Existing reference: PiSugar whisplay-ai-chatbot (TypeScript, basic chatbot)
 - Model loading on NPU uses CMM (compute memory), separate from system memory
-- Kokoro-82M TTS: RTF 0.067 on AX8850 (15x real-time), 237MB CMM, hybrid pipeline (3 axmodel NPU + ONNX vocoder CPU)
+- Kokoro-82M TTS: RTF 0.115 measured (Python/pyaxengine on Pi host), RTF 0.067 native (C++ on NPU CPU). 232 MiB CMM. No C++ AXCL aarch64 binary available — must use Python path. Voice file format: .npy (not .pt). Heavy Python deps required (kokoro, misaki, pypinyin, pyopenjtalk, etc.)
 - Kokoro proven on LLM-8850: see https://github.com/AndrewGraydon/kokoro.LM8850
-- Confirmed NPU memory budget: SenseVoice (~500MB) + Qwen3-1.7B (~3.3GB) + Kokoro (~237MB) + SmolVLM2-500M (~500MB) = ~4.5GB of 7.0GB (fits with ~2.5GB headroom). Qwen3-4B rejected — 6.2GB fills NPU, can't co-reside with any other model.
+- **Measured NPU memory budget (Phase 0):** SenseVoice (251 MiB) + Qwen3-1.7B (3,375 MiB) + Kokoro (232 MiB) + FastVLM-0.5B (792 MiB) = ~4.95 GB of 7.04 GB (29.7% headroom). Qwen3-4B rejected — 6.2GB fills NPU, can't co-reside with any other model.
 - whisplay-ai-chatbot LCD architecture: TypeScript brain + Python display over TCP socket; Pillow + cairosvg rendering at 30 FPS; SPI at 100MHz; SVG emoji, LANCZOS resampling, line caching
 - Cortex will adapt this approach, replacing TCP socket IPC with ZeroMQ to match the rest of the stack
 - CAAL (CoreWorxLab) is a single-agent voice pipeline, not a multi-agent framework — but the concept of separating reasoning from action execution via pre-defined workflows is sound
@@ -128,8 +132,8 @@ Seven-layer stack:
 - Workflow engine research (8 engines): n8n (200-860MB), Node-RED (40-80MB+leaks), Temporal (2-4GB), Prefect (500MB+), Windmill (no ARM64), Dagu (Go binary), pypyr (right pattern). All external engines too heavy for Pi — custom in-process Python action engine selected
 - Token budgets for 4K context: Orchestrator ~370 tokens (single classifier call), Super Agent ~4000 tokens (200 system + 150 tools + 3600 working), Utility Agent 0 tokens (deterministic)
 - MCP (Model Context Protocol) supported via Python `mcp` SDK: client mode discovers tools from external servers (HA, n8n), server mode exposes Cortex tools to external AI clients; Streamable HTTP transport on existing FastAPI server
-- Tiered VLM vision: SmolVLM2-500M always resident (~500MB, total NPU ~4.75GB); hot-swap to InternVL3-1B or Qwen2.5-VL-3B for detailed analysis (unloads LLM temporarily, voice pipeline pauses). Three image sources: CSI camera via picamera2 (physical Pi), webcam (web UI), file upload (web UI)
-- Whisplay HAT button hardware: single button on GPIO 11 (active low), 50ms debounce. RGB LEDs on GPIO 22/18/16. Same physical design as whisplay-ai-chatbot.
+- Tiered VLM vision: FastVLM-0.5B always resident (792 MiB, DD-045, replaces SmolVLM2-500M); hot-swap to InternVL3-1B or Qwen2.5-VL-3B for detailed analysis (unloads LLM temporarily, voice pipeline pauses). No C++ AXCL aarch64 binary — Python/pyaxengine path. Three image sources: CSI camera via picamera2 (physical Pi), webcam (web UI), file upload (web UI)
+- Whisplay HAT button hardware: single button on pin 11 (**active HIGH** — pressed=1, not active-low as initially assumed), RGB LEDs on pins 22/18/16. Uses RPi.GPIO BOARD pin numbering (not BCM, not gpiod). PWM cleanup has cosmetic TypeError bug in python3-rpi-lgpio (non-blocking).
 - Button-first interaction: hold=push-to-talk (record while held, ASR on release), double-click=camera capture+VLM, single-click=approve/confirm, long-press=deny/cancel, triple-click=system menu. No VAD anywhere — both Pi and Web UI use explicit button control for recording boundaries.
 - Web UI parity: every physical Pi capability has a software equivalent — record button (hold-to-talk or click-start/click-stop), webcam/upload for vision, approve/deny buttons for Tier 2/3, status indicator for LED state.
 - Model Provider Layer: provider-agnostic Protocol interfaces for LLM, ASR, TTS, VLM. Seven providers: axcl (local NPU), openai, anthropic, google, xai, ollama, openai_compatible. Per-profile provider chains with fallback and circuit breaker. Tool calling format auto-adapted per provider (NousFnCallPrompt for Qwen3, OpenAI function calling for cloud, etc.). Context is provider-managed — each provider handles its own limits, no centralized budget scaling. API keys in .env, cloud calls gated by security layer with auto nftables management. Default: fully offline (axcl only).
@@ -163,13 +167,16 @@ Seven-layer stack:
 - Voice user identification limitation: Cortex does NOT perform speaker identification in Phases 1-5. All voice treated as Primary User unless Guest Mode manually activated. Household Member restrictions only via authenticated Web UI (Phase 3+). Multi-speaker voice ID is Phase 6+ stretch goal.
 - Design audit findings (Session 11): 6 genuine gaps (auth, voice ID, contact store, Phase 0 tests, process architecture, ops lifecycle), 3 internal inconsistencies (missing DD-006-010, USB→CSI, IoT phase table), and several minor detail gaps. All addressed in v0.1.13.
 - Phase readiness review (Session 11): Phase 0 guide missing peripheral tests (LCD, LEDs, button, speaker, standalone 1.7B). Phase 1 missing project scaffolding and MockNpuService for off-Pi dev. Phase 2 overloaded (15 items) — moved external services (DD-035) and A2A (DD-036) to Phase 3. All phases now have measurable exit criteria. Testing approach: pytest + MockNpuService + pre-commit hooks, no CI server. Scope doc v0.1.14.
+- **Phase 0 hardware validation (Session 12):** All hardware tested and validated on Pi 5 (10.10.0.129). AXCL runtime installed (`sudo apt install axclhost`, package is `axclhost` not `axcl-smi`). PiSugar 3 Plus not physically connected (pogo pins not in contact) — pisugar-server disabled. All peripherals verified: LCD (ST7789 240x280 SPI, color cycling), RGB LEDs (PWM), button (active-HIGH), speaker (440Hz tone), microphone (record/playback). All 4 NPU models tested with measured benchmarks. Investigations: speculative decoding not supported by AXCL binary, constrained generation limited to stop tokens via post_config.json, Moonshine ASR not needed (SenseVoice has streaming axmodel), unified multimodal not needed (separate models more flexible). FastVLM-0.5B selected over SmolVLM2-500M (DD-045).
+- **AXCL runtime gotchas (Phase 0):** Package name is `axclhost` (single package, not separate tools). DKMS builds 6 kernel modules. Tools at `/usr/bin/axcl/`. LLM inference requires separate tokenizer HTTP server on port 12345 (per-model Python script). HuggingFace CLI is now `hf` (not `huggingface-cli`) in huggingface_hub v1.5+. PEP 668 on Bookworm requires venv for pip packages (`~/.venvs/axllm/`). Some models only have AX650 native binaries (no AXCL aarch64 for Pi host) — must use Python pyaxengine path. Kokoro and FastVLM both require Python path; SenseVoice and Qwen3 have C++ AXCL aarch64 binaries.
 
 ## Open Questions (to resolve during Phase 0)
-1. ~~Can SenseVoice + Qwen3-1.7B + Kokoro + SmolVLM2 all co-reside in 8GB NPU CMM?~~ Resolved: budget is ~4.75GB, fits with ~2.3GB headroom.
-2. NPU model hot-swap latency?
+1. ~~Can SenseVoice + Qwen3-1.7B + Kokoro + VLM all co-reside in 8GB NPU CMM?~~ **Resolved (Phase 0 measured):** SenseVoice (251 MiB) + Qwen3-1.7B (3,375 MiB) + Kokoro (232 MiB) + FastVLM-0.5B (792 MiB) = ~4.95 GB, fits with 29.7% headroom.
+2. NPU model hot-swap latency? (Not yet tested — requires loading/unloading under load)
 3. ~~Wake word engine choice?~~ Resolved: removed entirely (DD-025). Button-only activation.
 4. Need USB SSD for extended storage?
 5. Enclosure design?
+6. ~~PiSugar 3 Plus integration?~~ Deferred: hardware not physically connected (pogo pins). Service disabled. Will revisit when mechanically attached.
 
 ## File Structure
 ```
@@ -202,16 +209,17 @@ Cortex/
 
 - **Session 11 (2026-03-02):** Comprehensive design audit of v0.1.12 (44 DDs, 1849 lines). Found 6 genuine gaps, 3 internal inconsistencies, and several minor detail gaps. Fixed all inconsistencies: recovered missing DD-006–010 in §9 log, changed "USB camera" → "CSI camera" (2 locations), aligned IoT phase table with phase plan (MQTT/REST/HA → Phase 5, Matter/BLE → Future), corrected DD-015 "15 tok/s" → "7.38 tok/s", fixed HAL "gRPC or Unix socket" → "ZeroMQ". Added DD-042: Web authentication & session management (bcrypt + session cookie, phase-gated, persona mapping). DD-043: Process & service architecture (single main process + separate HAL services, ZeroMQ IPC). DD-044: Operational lifecycle (deployment, migration, backup/restore, logging). Added contact store spec, voice user identification limitation note. Updated Phase 0 guide with Tests 7-9 (Kokoro TTS, SmolVLM2-500M vision, CSI camera) and 4 investigation procedures (speculative decoding, constrained generation, Moonshine ASR, unified multimodal). Updated config template (auth details, contacts section, ZeroMQ topic convention). Updated scope doc to v0.1.13. Phase readiness review: added peripheral test procedures to Phase 0 guide (speaker, LCD, button, LEDs, standalone Qwen3-1.7B). Added project scaffolding and MockNpuService to Phase 1. Rebalanced Phase 2→3: moved external services (DD-035) and A2A (DD-036) from Phase 2 to Phase 3 (reduces Phase 2 from 15→12 items). Added measurable exit criteria for all 7 phases. Added §6.2 Testing Approach (pytest, MockNpuService, per-phase expectations). Updated scope doc to v0.1.14.
 
+- **Session 12 (2026-03-02):** Phase 0 hardware validation — complete. Installed AXCL runtime (`axclhost` v3.6.5, 6 DKMS kernel modules). Verified NPU: AX650N, 7040 MiB CMM, firmware V3.6.4. Diagnosed PiSugar I2C issue — hardware not physically connected (pogo pins), pisugar-server disabled. Verified all peripherals: LCD color cycling (ST7789 SPI), RGB LEDs (PWM), button (active-HIGH, correcting previous active-low assumption), speaker (440Hz tone), microphone (record/playback). Tested all models with measured benchmarks: Qwen3-0.6B (13.74 tok/s, 2,011 MiB), Qwen3-1.7B (7.70 tok/s, 3,375 MiB), SenseVoice (RTF 0.028, 251 MiB), Kokoro (RTF 0.115 Python, 232 MiB), FastVLM-0.5B (792 MiB). Total 4-model co-resident: ~4.95 GB (29.7% headroom). Key findings: Kokoro and FastVLM have no C++ AXCL aarch64 binary — must use Python/pyaxengine path (slower but functional). SenseVoice has streaming axmodel (Moonshine not needed). AXCL binary doesn't support speculative decoding or grammar-guided constrained generation. Added DD-045 (FastVLM-0.5B replaces SmolVLM2-500M). Updated Phase 0 guide with comprehensive §0.8 Model Setup Notes covering every model codebase's gotchas. Updated scope doc to v0.1.15 with all measured values. Phase 0 exit criteria: all met except final commit.
+
 ### NEXT SESSION — Resume Here
-**Topic:** Review phases for readiness, then begin Phase 0 hardware setup. Possible next topics:
-- **Phase readiness review:** Walk through each phase plan to verify all prerequisites, dependencies, and deliverables are well-defined
-- **Phase 0 hardware setup:** Begin actual hardware assembly and driver validation on the Pi 5
-- **Agent architecture refinement:** Detail super agent YAML definitions, draft initial `config/agents/` files
-- **Detailed action template design:** Flesh out the built-in action templates for Phase 2
+**Topic:** Phase 0 is complete. Begin Phase 1 — Voice Loop. Possible next topics:
+- **Phase 1 kickoff:** Project scaffolding — `pyproject.toml`, `src/cortex/` package, ruff + mypy + pytest config, pre-commit hooks
+- **Development environment:** virtualenv setup, `MockNpuService` for off-Pi testing, `scripts/dev-setup.sh`
+- **NpuService Protocol spec:** Draft the full Python Protocol class and AxclNpuService implementation plan
+- **Service architecture:** systemd units, ZeroMQ IPC, data directory setup
+- **Voice pipeline design:** Detailed implementation plan for button → ASR → LLM → TTS → speaker
 - **Display UI deep-dive:** Detail the LCD render pipeline, display state machine, and status screen layouts
 - **System prompt drafting:** Create initial `config/prompts/system_v1.txt` persona templates
-- **External services protocol design:** Detail the Service Adapter Protocol interfaces for CalDAV, ntfy, IMAP
-- **NpuService Protocol spec:** Draft the full Python Protocol class and AxclNpuService implementation plan
 
 ---
 
