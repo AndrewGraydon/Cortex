@@ -1,11 +1,30 @@
 # Project Cortex — Agentic Local LLM Voice Assistant
-## System Design Scope Document v0.1.8
+## System Design Scope Document v0.1.11
 
 ---
 
 ## 1. Vision Statement
 
 A fully local, privacy-first, voice-and-web AI assistant running on a Raspberry Pi 5 with NPU acceleration. The system operates autonomously for safe tasks, requests approval for risky operations, can dynamically create its own tools and agents, integrates with smart home/IoT devices, and maintains comprehensive audit trails — all while keeping data local by default with optional secure external access.
+
+### User Personas
+
+Four personas anchor the interaction design. Each maps to a permission level and has different expectations.
+
+| Persona | Description | Access Level | Primary Interface | Key Expectations |
+|---|---|---|---|---|
+| **Primary User** | Developer/owner who built and maintains the system | Full (all tiers, admin) | Voice + Web UI | Deep customization, tool creation, agent tuning, full memory access |
+| **Household Member** | Non-technical family member using the assistant daily | Standard (Tier 0-1 auto, Tier 2 with approval) | Voice (primary), Web UI (occasional) | "Just works" — ask questions, set timers, control lights, no config required |
+| **Guest** | Visitor with temporary, limited access | Restricted (Tier 0 only, no memory, no IoT) | Voice only | Basic questions, time/weather, no personal data exposure, no device control |
+| **Remote User** | Primary user accessing from outside the home network | Full (via authenticated Web UI) | Web UI only | Same capabilities as at home, but through web interface with auth |
+
+**Primary User (Andrew):** The person who built and maintains the system. Creates and edits agents, tools, and automations. Reviews audit logs, manages memory, configures providers, approves Tier 3 operations. Uses both voice and web UI depending on context. The system recognizes this user by default (single-user voice; multi-user voice ID is a Phase 6+ stretch goal).
+
+**Household Member:** Uses the assistant like a smart speaker — "set a timer for 10 minutes", "what's the weather", "turn off the kitchen lights". Never touches config. Expects natural conversation, clear confirmations, and graceful handling of unsupported requests. Should never encounter raw error messages or technical jargon. The system should feel helpful and approachable. Access controlled by the primary user's permission configuration.
+
+**Guest:** Temporary access, no persistence. Cannot trigger any Tier 1+ actions without primary user approval. Cannot access memory (personal facts about the household). Cannot control IoT devices. Can ask general knowledge questions, get the time, and have basic conversation. Guest mode activated explicitly by the primary user (voice command or web UI toggle). When active, long-term memory injection is disabled and the system prompt includes privacy constraints.
+
+**Remote User:** The primary user accessing from outside the local network via the authenticated web UI (§4.6.2). Same capabilities as local primary user, but voice input goes through browser microphone and TTS plays through browser audio. Latency is higher (network round-trip) but functionality is identical. Requires authentication (§4.5). Cannot use physical button gestures but all software equivalents are available.
 
 ---
 
@@ -76,6 +95,76 @@ A fully local, privacy-first, voice-and-web AI assistant running on a Raspberry 
 - Hardware access controlled via udev rules and Linux capability sets.
 - HAL exposes a unified event bus (e.g., ZeroMQ or D-Bus) for hardware events (button press, low battery, NPU thermal throttle).
 
+#### 4.1.1 System Health & Monitoring
+
+A dedicated HAL-level service that continuously monitors system health and publishes status on the ZeroMQ event bus. Other layers (agent framework, web UI, display UI, notification system) subscribe to health events.
+
+**Monitored Metrics:**
+
+| Component | Metrics | Poll Interval | Alert Threshold |
+|---|---|---|---|
+| NPU | Temperature, CMM usage, utilization % | 5s | Temp > 75°C (throttle), > 85°C (shutdown) |
+| CPU (Pi 5) | Temperature, load average, usage % | 10s | Temp > 80°C, load > 3.0 |
+| Memory (Pi 5) | RAM usage %, swap usage % | 30s | RAM > 85%, swap > 50% |
+| Storage | Disk usage %, I/O latency | 60s | Disk > 90% |
+| Battery | Level %, charging state, estimated runtime | 30s | < 15% (low), < 5% (critical) |
+| Network | Connectivity to configured endpoints | 60s | Unreachable for > 30s |
+| Services | systemd unit status for all Cortex services | 10s | Any unit in failed state |
+
+**Health API Endpoint:**
+
+`GET /api/health` — FastAPI endpoint, no auth required on local network. Returns JSON:
+```json
+{
+  "status": "healthy | degraded | critical",
+  "uptime_seconds": 12345,
+  "components": {
+    "npu": {"status": "healthy", "temp_c": 62, "cmm_used_mb": 4500, "cmm_total_mb": 7040},
+    "cpu": {"status": "healthy", "temp_c": 55, "load_1m": 1.2},
+    "memory": {"status": "healthy", "used_pct": 45},
+    "storage": {"status": "healthy", "used_pct": 32},
+    "battery": {"status": "healthy", "level_pct": 85, "charging": true},
+    "services": {"status": "healthy", "failed": []}
+  },
+  "models_loaded": ["sensevoice", "qwen3-1.7b", "kokoro", "smolvlm2-500m"]
+}
+```
+Overall `status` is the worst of any component: all healthy = healthy, any warning = degraded, any critical = critical.
+
+**NPU Thermal Management (4 zones):**
+
+| Zone | Temperature | Behavior | User Impact |
+|---|---|---|---|
+| Normal | < 65°C | Full speed, all models co-resident | None |
+| Warm | 65-75°C | Log warning, monitor trend | None (transparent) |
+| Throttle | 75-85°C | Reduce generation speed, pause non-essential models | Transparent unless sustained >30s, then "I need to cool down for a moment." |
+| Shutdown | > 85°C | Emergency model unload, NPU service restart | "Something's too hot. Give me a minute to cool down." |
+
+**Watchdog:**
+- **systemd software watchdog:** `WatchdogSec=30` on the main Cortex service. If the service fails to send a heartbeat within 30s, systemd restarts it. On restart: health check runs, models reloaded, pending timers/reminders recovered from SQLite.
+- **Max restarts:** 3 within 5 minutes. After that, systemd gives up — LCD shows static error screen, LED pulses red, web UI shows diagnostic page.
+- **Hardware watchdog (Phase 6):** Raspberry Pi BCM2835 hardware watchdog via `dtparam=watchdog=on`. Recovers from kernel panics and complete system freezes.
+
+**Graceful Degradation Matrix:**
+
+| Failure | User Experience | System Behavior |
+|---|---|---|
+| All LLM providers fail | "I can't think right now, but I can still set timers and tell you the time." | Rule-based fallback: regex-matched commands for utility agents (timer, clock, system status). No LLM-dependent features. |
+| TTS fails | Response displayed as text on LCD | Silent mode — all responses visual-only. Log TTS error. |
+| ASR fails | LCD shows "Voice unavailable — use web UI" | Web UI text input still works. Button press plays error tone. |
+| Network down | (Transparent for local-only operation) | Cloud providers marked unavailable. Local NPU continues. User notified only when attempting a network-dependent action. |
+| Battery < 15% | "Battery is getting low." | Reduce LCD brightness, suspend non-essential polling, disable IoT monitoring. |
+| Battery < 5% | "Battery critical. Saving state and shutting down." | Save working memory, pending schedules. Clean shutdown. |
+| Storage full | "I'm running out of storage space." | Disable audit log writes (ring buffer), stop memory extraction, alert user to free space. |
+| Service crash | (Brief interruption, ~5-10s) | systemd auto-restart, state recovery from persistent storage. |
+
+**Error UX Principles:**
+1. Never show raw error messages or stack traces to the user via voice or LCD.
+2. Always provide a human-readable explanation of what went wrong and what the user can do.
+3. Self-recoverable failures → tell the user to wait. Non-recoverable → tell the user what manual step is needed.
+4. Full technical details logged to audit system for primary user to review via web UI.
+5. LCD always shows *something* — even in catastrophic failure, display a static "Cortex is having trouble — check the web dashboard" screen.
+
 ---
 
 ### 4.2 Voice Pipeline
@@ -140,7 +229,67 @@ This eliminates VAD entirely from the system — no Silero, no silence detection
 - LLM first token: ~1-2s (prefill)
 - LLM generation (50-token response @ 7.38 tok/s): ~6.8s total
 - TTS first audio: < 200ms after first sentence complete (streaming)
-- **Critical optimization:** Stream TTS while LLM is still generating (sentence-level chunking via Kokoro's native generator pipeline). First audio plays within ~3s of button release even though full generation takes longer.
+- **Critical optimization:** Stream TTS while LLM is still generating (sentence-level chunking). First audio plays within ~5s of button release even though full generation takes longer. See Streaming Voice Pipeline below.
+
+#### 4.2.1 Streaming Voice Pipeline
+
+**Problem:** At 7.38 tok/s, a 50-token response takes ~6.8s of silence before the user hears anything. Unacceptable for voice UX.
+
+**Solution:** Sentence-boundary streaming with parallel TTS — deliver audio sentence-by-sentence while the LLM is still generating.
+
+```
+LLM generates tokens ──→ Sentence Detector ──→ TTS Queue ──→ Audio Output
+    (7.38 tok/s)          (buffer until          (Kokoro       (sequential
+                           sentence end)          synthesis)     playback)
+```
+
+**Sentence Boundary Detection:**
+Lightweight buffer on Pi 5 CPU that accumulates LLM output tokens and flushes on sentence boundaries:
+- **Primary triggers:** `.` `!` `?` followed by whitespace or end-of-generation
+- **Secondary triggers:** `:` `;` `—` followed by whitespace (for lists, clauses)
+- **Minimum chunk:** 8 tokens (avoids tiny fragments that sound choppy)
+- **Maximum chunk:** 96 tokens (Kokoro axmodel limit, matches `tts.axcl.max_chunk_tokens` in config)
+- **End flush:** When LLM generation completes, flush any remaining buffered tokens regardless of boundary
+- Simple state machine implementation — no NLP library, negligible CPU overhead.
+
+**Parallel TTS via NPU Model Multiplexing:**
+LLM (Qwen3-1.7B) and TTS (Kokoro-82M) are co-resident in NPU memory. While the LLM generates sentence 2, Kokoro synthesizes sentence 1. The AXCL runtime supports context-switching between co-resident models. Phase 0 testing must verify context-switch latency is acceptable.
+
+Audio chunks played sequentially with 10ms linear crossfade (NumPy on CPU) to prevent pops/clicks at sentence boundaries.
+
+**Timeline example (3-sentence, ~80-token response):**
+```
+t=0.0s  Button released, ASR starts
+t=0.5s  ASR complete (~50-75ms SenseVoice), LLM prefill begins
+t=1.5s  LLM first token generated
+t=4.0s  First sentence complete (~18 tokens, ~2.4s generation)
+t=4.2s  Kokoro synthesizes sentence 1 (RTF 0.067 ≈ ~200ms for short sentence)
+t=4.4s  *** FIRST AUDIO PLAYS ***
+t=6.5s  Second sentence complete (generated while sentence 1 plays)
+t=6.7s  Kokoro synthesizes sentence 2 (overlapped with playback of sentence 1)
+t=9.0s  Third sentence complete → synthesize → play seamlessly
+```
+
+**Audio Format:**
+
+| Stage | Format | Sample Rate | Notes |
+|---|---|---|---|
+| Mic input (ASR) | S16_LE mono PCM | 16,000 Hz | WM8960 codec, ALSA capture |
+| Kokoro TTS output | Float32 PCM | 24,000 Hz | Native Kokoro output rate |
+| Speaker output | S16_LE mono PCM | 24,000 Hz | WM8960 playback via ALSA |
+| Web UI audio | Opus or PCM | 24,000 Hz | WebSocket binary frames or Web Audio API |
+
+**Latency Metrics (logged per voice interaction for profiling):**
+
+| Metric | Target | Measurement Point |
+|---|---|---|
+| Time-to-first-audio (TTFA) | < 5.0s | Button release → first audio sample out of speaker |
+| ASR latency | < 500ms | Button release → ASR text available |
+| LLM prefill latency | < 1.5s | ASR complete → first LLM token |
+| TTS chunk latency | < 300ms | Sentence text → audio chunk ready |
+| Inter-chunk gap | < 50ms | End of chunk N playback → start of chunk N+1 |
+
+**Fallback:** If Phase 0 testing shows NPU model context-switching is too slow for parallel operation, fall back to sequential mode: generate full LLM response, then synthesize and play all at once. TTFA degrades to ~7-10s but the system remains fully functional. Sequential mode is the pessimistic baseline; streaming is the optimistic target.
 
 **NPU Memory Management Strategy:**
 - Default: all four primary models co-resident (~4.5 GB of 7 GB, ~2.5 GB headroom).
@@ -500,6 +649,17 @@ Cognitive tools help super agents **think** — they are read-only, safe (Tier 0
 | `calendar_query` | Read calendar/reminders | 0 |
 | `file_read` | Read files in designated directories | 0 |
 | `image_analyze` | Analyze image via VLM (camera, upload, or URL) | 0 |
+| `clock` | Current time, date, timezone, sunrise/sunset | 0 |
+| `timer_query` | Check active timers and their remaining time | 0 |
+| `reminder_query` | Check upcoming reminders | 0 |
+| `weather_query` | Current/forecast weather (requires network) | 1 |
+| `calculator` | Evaluate mathematical expressions | 0 |
+| `unit_convert` | Convert between units (temperature, distance, weight, volume, etc.) | 0 |
+| `dictionary_lookup` | Word definitions, synonyms | 0 |
+| `translate` | Translate text between languages (via LLM or API) | 1 |
+| `list_query` | Read items from named lists (shopping, todo, etc.) | 0 |
+
+`clock`, `calculator`, `unit_convert`, and `dictionary_lookup` are implemented as pure Python functions — zero LLM cost, zero network, instant response. They are the fastest path for common everyday queries.
 
 `image_analyze` accepts an image from three sources: physical camera capture, web UI upload/webcam, or a URL. It routes to the appropriate VLM profile (`vision_quick` for fast descriptions, `vision_detail` or `vision_advanced` when requested). See §4.3 Model Router for VLM profiles.
 
@@ -740,6 +900,115 @@ After a conversation ends (idle timeout, configurable — default 5 minutes):
 - When `allow_sensitive_data: false` (default for cloud providers): the `[Memory]` block and conversation summary are stripped from prompts before sending. Only system prompt, tools, recent turns, and current request are sent.
 - When `allow_sensitive_data: true`: full context including memories is sent. User explicitly opted in.
 
+#### 4.4.11 Scheduling Service
+
+Manages time-based triggers (timers, reminders, scheduled tasks). Must survive reboots.
+
+**Architecture:**
+- Persistent storage in SQLite (`data/schedules.db`).
+- On startup: load all pending schedules, calculate next fire times, register with asyncio event loop.
+- Uses `asyncio` scheduling for sub-second precision.
+- On Cortex restart (systemd watchdog recovery): pending schedules recovered from SQLite automatically.
+
+**Timer Schema:**
+
+| Field | Type | Purpose |
+|---|---|---|
+| `id` | UUID | Primary key |
+| `label` | text (optional) | User-provided name ("pasta timer") |
+| `duration_seconds` | integer | Original timer duration |
+| `created_at` | datetime | When set |
+| `fires_at` | datetime | When it should fire |
+| `status` | enum | `active`, `fired`, `cancelled` |
+| `notification_priority` | integer | Default: P2 (chime) |
+
+**Reminder Schema:**
+
+| Field | Type | Purpose |
+|---|---|---|
+| `id` | UUID | Primary key |
+| `message` | text | What to remind about ("Call Mom", "Take medication") |
+| `fires_at` | datetime | When it should fire |
+| `recurrence` | text | `null`, `daily`, `weekly`, `weekdays`, or cron expression |
+| `status` | enum | `active`, `fired`, `snoozed`, `cancelled` |
+| `notification_priority` | integer | Default: P3 (spoken) |
+| `snooze_count` | integer | Number of times snoozed (max 3) |
+
+**Timer/Reminder UX Flow:**
+
+```
+User: "Set a timer for 10 minutes"
+  → Orchestrator routes to timer utility agent
+  → timer_set action: duration=600, label=null
+  → Scheduling Service creates timer in SQLite, fires_at = now + 600s
+  → Confirmation: "Timer set for 10 minutes." (spoken)
+  → LCD idle screen shows timer countdown
+
+[10 minutes later]
+  → Scheduling Service fires timer
+  → Notification System delivers P2 notification (chime + LCD)
+  → If user is mid-conversation: badge appears, notification queued until session ends
+
+User: "How much time is left on my timer?"
+  → timer_query cognitive tool returns remaining time
+  → "You have about 4 and a half minutes left."
+```
+
+**Reminder snooze:** After a reminder fires, user can say "snooze" or single-click within 30s to snooze for 10 minutes (configurable). Max 3 snoozes per reminder.
+
+**New action templates (all Tier 1):**
+
+| Template | Purpose | Parameters |
+|---|---|---|
+| `timer_set` | Create countdown timer | `duration` (seconds), `label` (optional) |
+| `timer_cancel` | Cancel active timer | `timer_id` or `label` |
+| `reminder_set` | Create time-based reminder | `message`, `fires_at`, `recurrence` (optional) |
+| `reminder_cancel` | Cancel a reminder | `reminder_id` or `message` match |
+| `list_add` | Add item to a named list | `list_name`, `item` |
+| `list_remove` | Remove item from a named list | `list_name`, `item` |
+| `list_create` | Create a new named list | `list_name` |
+
+#### 4.4.12 Notification & Alert System
+
+The notification system is the **proactive delivery mechanism** — the system initiates communication with the user rather than responding to a request. All notifications flow through a central queue with priority-based delivery.
+
+**Notification Sources:**
+- Timer completion (Scheduling Service)
+- Reminder trigger (Scheduling Service)
+- Smart home alerts (IoT layer — motion detected, door opened, device offline)
+- Approval request timeouts (Agent Framework)
+- System health alerts (HAL Health Service — low battery, thermal throttle, service failure)
+
+**Priority Model (5 levels):**
+
+| Priority | Delivery Channels | Behavior | Examples |
+|---|---|---|---|
+| **P0 — Silent** | LCD badge only | No audio, no interruption. Small icon/counter on idle screen. | Completed background tasks, low-priority HA events |
+| **P1 — Visual** | LCD notification card + LED amber pulse | No audio. Card auto-dismisses after 10s. | Weather alerts, non-urgent reminders |
+| **P2 — Chime** | LCD + LED + short audio tone | Brief audible alert. Does NOT interrupt active conversation. | Timer complete, approval timeout warning |
+| **P3 — Spoken** | LCD + LED + TTS announcement | System speaks the notification. Waits for active conversation to finish before delivering. | Scheduled reminders, important HA alerts |
+| **P4 — Interruptive** | LCD + LED + TTS (interrupts everything) | Immediately interrupts any activity including active conversation. | Critical system alerts, security events, smoke detector |
+
+**Queueing & Delivery:**
+- During active voice session: P0-P3 notifications are queued. Delivered in priority order after session ends (idle timeout or farewell).
+- P4 notifications always delivered immediately, regardless of session state.
+- Web UI sessions receive all notifications via WebSocket push. Browser Notification API used for P2+ when tab is not focused.
+
+**Do Not Disturb (DND):**
+- Configurable quiet hours (e.g., 22:00-07:00).
+- During DND: P0-P2 silently queued. P3 downgraded to P1 (visual only). P4 still interrupts (safety-critical).
+- DND toggled by voice ("quiet mode on/off"), web UI, or schedule in config.
+
+**LCD Notification Display:**
+
+| Display State | Notification Behavior |
+|---|---|
+| Idle + no notifications | Normal idle screen (clock, battery, wifi) |
+| Idle + pending P0 | Small badge icon in top-right corner with count |
+| Idle + pending P1+ | Notification card overlays idle screen, auto-dismiss after 10s |
+| Active conversation + notification arrives | Badge appears in corner, notification queued |
+| P4 arrives during conversation | Full-screen alert, conversation paused |
+
 ---
 
 ### 4.5 Security Architecture
@@ -949,6 +1218,99 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 - Red flash: Action denied / cancelled
 - Green flash: Action approved
 - Smooth 20-step color fading between states
+- Amber pulse (#ffaa00): Notification pending (new, added by notification system)
+
+#### 4.6.4 Voice Interaction Lifecycle
+
+Defines the complete user-facing experience from session start to end, including interruptions, error recovery, confirmations, and capability discovery. This bridges the hardware pipeline (§4.2) with the user-facing interface.
+
+**Session Management:**
+
+```
+First button press ──→ SESSION START
+       │
+  Conversation turns ──→ Active session (working memory accumulates)
+       │
+  Idle timeout (5 min) ─┐
+  or explicit farewell ──┤──→ SESSION END
+       │                 │     ├── Memory extraction triggered (DD-028)
+       │                 │     └── Display returns to Idle
+       │                 │
+  [No explicit "start"   [Farewell: "goodbye", "that's all",
+   needed — first press    "thanks I'm done" — regex-matched,
+   begins session]         zero LLM cost]
+```
+
+- Session starts implicitly on first button press after idle. No explicit command needed.
+- Session ends on configurable idle timeout (default 5 min, aligns with `memory.extraction.idle_timeout`) or explicit farewell patterns.
+- One active voice session at a time on the physical Pi. Web UI can have concurrent sessions per authenticated user.
+- Session state tracked in working memory: conversation history, rolling summary, active task state, pending approvals.
+
+**Interruption Handling:**
+
+| Scenario | Trigger | Behavior | Display/LED |
+|---|---|---|---|
+| User long-presses during TTS playback (>2s) | Long press | Stop audio immediately, cancel TTS queue, discard remaining response. No spoken feedback — the interruption IS the intent. | Speaking → Idle, LED red flash |
+| User holds button during TTS (new push-to-talk) | Hold > 300ms | Stop TTS playback, transition to Listening. New utterance replaces current response. Interrupted response still added to conversation history but **marked as truncated** — system knows what was actually heard vs. what was planned (per LiveKit speech truncation pattern). | Speaking → Listening, LED green |
+| User long-presses during LLM generation (no audio yet) | Long press > 2s | Cancel in-flight LLM call. Brief feedback: "Cancelled." or a cancel tone. Return to Idle. | Thinking → Idle, LED red flash |
+
+**Error Recovery:**
+
+| Error Condition | User Hears/Sees | System Behavior |
+|---|---|---|
+| ASR returns empty or low-confidence | "I didn't catch that. Could you try again?" | Log ASR failure, stay in session, re-enter Listening on next button press |
+| ASR returns gibberish (confidence < threshold) | "I'm not sure I understood that. Could you say it differently?" | Same as above. LCD shows transcribed text for visual verification. |
+| LLM generation fails | "I'm having trouble thinking right now. Let me try again." | Retry once with same prompt. If still fails, try fallback provider (DD-022). If all fail, apologize and suggest trying again later. |
+| LLM returns empty/incoherent | "I'm not sure how to respond to that. Could you rephrase?" | Log, stay in session. |
+| TTS synthesis fails | Response displayed as text on LCD (silent fallback) | Log TTS error. System remains functional — all responses are visual-only until TTS recovers. |
+| Tool execution fails | "I couldn't [action] — [reason]." e.g., "I couldn't turn off the lights — the device isn't responding." | Specific error explanation spoken. Action logged as failed in audit. |
+| NPU thermal throttle (sustained >30s) | "I need to cool down for a moment." | Pause inference, wait for temperature to drop. See §4.1.1 thermal zones. |
+| NPU crash | "Something went wrong. Give me a moment." | Attempt NPU service restart via systemd. If fails, switch to cloud fallback if available. |
+
+**Confirmation Feedback Patterns:**
+
+All state-changing actions produce explicit spoken or displayed confirmation so the user knows what happened:
+
+| Action Type | Confirmation | Example |
+|---|---|---|
+| Timer set | Spoken confirmation with details | "Timer set for 10 minutes." |
+| Reminder set | Spoken + LCD notification | "I'll remind you to call Mom at 3 PM." |
+| Device controlled | Spoken confirmation | "Kitchen lights turned off." |
+| Information query | Answer IS the confirmation | (No separate confirmation needed) |
+| Memory stored | Brief acknowledgment | "Got it, I'll remember that." |
+| Approval granted | Spoken + LED green flash | "Approved. Running now." |
+| Approval denied | Spoken + LED red flash | "Cancelled." |
+| Action failed | Spoken error + reason | "I couldn't turn off the lights — the device isn't responding." |
+
+**Capability Discovery:**
+
+"What can you do?" / "Help" triggers a pre-defined capability summary, NOT an LLM-generated response (zero LLM cost). The summary is served from versioned templates stored in `config/prompts/capabilities.yaml` with per-persona variants:
+
+- **Primary User:** Full capability list including admin features, tool creation, agent management.
+- **Household Member:** Simplified list — questions, timers, reminders, smart home, lists.
+- **Guest:** Restricted list — questions, time, weather, basic conversation only.
+
+**System Prompt Persona Guidelines:**
+
+The system prompt defines Cortex's conversational personality. These are the design constraints that all system prompt template versions must follow (actual prompt text is authored separately in `config/prompts/`):
+
+| Guideline | Specification |
+|---|---|
+| **Name** | "Cortex" (user-configurable in config) |
+| **Personality** | Helpful, concise, slightly warm but not overly chatty |
+| **Brevity** | Voice responses: 1-3 sentences (~50 tokens). Web UI text: can be longer. |
+| **Uncertainty** | Acknowledge: "I'm not certain, but..." — never fabricate or hallucinate. |
+| **Humor** | Light and occasional, never forced. No jokes unless contextually appropriate. |
+| **Formality** | Casual but not slangy. A knowledgeable friend, not a corporate assistant. |
+| **Error tone** | Brief and apologetic: "Sorry, I couldn't do that" not "I sincerely apologize for the inconvenience." |
+| **Memory references** | Natural integration: "You mentioned last week that..." not "According to my long-term memory store..." |
+| **Tool transparency** | Tell the user what you're doing: "Let me check..." / "Setting that up now..." |
+| **Response length** | Adapted per interface: voice responses target <50 tokens, web UI can be longer. Controlled by `reasoning.max_tokens` per interface. |
+
+System prompt templates stored in `config/prompts/` directory, versioned (v1, v2, ...), referenced by `reasoning.system_prompt_version` in config. Each version contains:
+- **Base persona** (shared across all contexts)
+- **Agent-specific addendum** (per super agent YAML `system_prompt` field)
+- **Per-persona privacy constraints** (Guest mode strips memory references and adds "Do not reference personal information about the household")
 
 ---
 
@@ -1010,17 +1372,24 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 - LLM (Qwen3-1.7B) on NPU — basic chat
 - TTS (Kokoro-82M) on NPU
 - End-to-end voice conversation
+- Streaming voice pipeline (sentence detector, TTS queue, crossfade)
+- Voice interaction lifecycle (session management, interruption handling, error recovery)
 - Button gesture recognition, LCD status display
-- Latency profiling
+- System prompt persona v1 (`config/prompts/system_v1.txt`)
+- Latency metric collection (TTFA, ASR, prefill, chunk, inter-chunk)
 
 ### Phase 2 — Agent Core (Weeks 6-9)
 - Tool calling (Hermes templates)
-- Built-in tool set
+- Built-in tool set + utility cognitive tools (clock, calculator, unit_convert, dictionary_lookup)
 - Permission engine (4-tier)
 - Approval flows (voice, LCD, web)
 - Audit logging
 - Conversation memory
 - Sandboxed execution
+- Scheduling service (timers, reminders) with SQLite persistence
+- Notification system (5 priority levels, LCD integration, DND)
+- List management (shopping lists, todo lists)
+- Health monitoring service and `/api/health` endpoint
 
 ### Phase 3 — Web UI (Weeks 10-12)
 - FastAPI backend + WebSocket streaming
@@ -1028,6 +1397,8 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 - Security console
 - Authentication
 - Settings
+- Notification center in web UI
+- WebSocket notification push + browser notifications (P2+)
 
 ### Phase 4 — Dynamic Capabilities (Weeks 13-16)
 - Tool development pipeline (specify → develop → review → approve → deploy)
@@ -1043,13 +1414,16 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 - Natural language device control
 - Home Assistant API
 - LLM-generated automations
+- Smart home alert routing through notification system
+- Weather API integration (`weather_query` cognitive tool)
 
 ### Phase 6 — Hardening & Polish (Weeks 21-24)
 - Security audit
 - Encrypted storage
 - Secrets management
 - Performance optimization
-- Error recovery
+- Error recovery and graceful degradation testing (fault injection)
+- Hardware watchdog tuning and thermal policy validation
 - Documentation
 
 ---
@@ -1077,13 +1451,17 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 
 ## 8. Success Criteria
 
-- Voice round-trip < 4 seconds for simple queries
+- Time-to-first-audio < 5 seconds for typical voice queries (streaming pipeline)
 - Fully offline core voice assistant
 - Dynamic tool creation end-to-end
 - All Tier 2/3 actions require explicit approval
 - Full audit trail
 - Stable 24+ hour operation
 - Battery: 1+ hour active / 4+ hours idle
+- Timer/reminder delivery within 1 second of scheduled time
+- Health endpoint responds within 100ms
+- System auto-recovers from service crash within 10 seconds (systemd restart)
+- All error states produce user-friendly feedback (never raw errors via voice or LCD)
 
 ---
 
@@ -1115,6 +1493,10 @@ Single button on GPIO 11 (active low, 50ms debounce). All interaction through ge
 | DD-027 | Tool Development Pipeline | 2026-02-27 | Structured lifecycle for tool creation: Specify (requirements YAML) → Develop (LLM-generated or human-written code) → Review (static analysis, sandbox test, security scan) → Approve (Tier 3 human approval) → Deploy (registered in tool registry). Tools remain in "draft" state until approved. Unapproved tools can be tested in sandbox but cannot affect real systems. |
 | DD-028 | Conversation context assembly and memory system | 2026-02-27 | Context Assembler builds prompts in priority order: system prompt → current request → tools → auto-injected memories → rolling summary → recent turns → older history. Rolling summary (generated during TTS playback, hidden latency) maintains coherence on 4K local NPU. Five memory tiers: working (RAM, session), short-term (SQLite, conversation summaries), long-term (SQLite + sqlite-vec, atomic facts with embeddings), episodic (events), tool (filesystem). Post-session LLM extraction captures facts/events. Automatic semantic retrieval injects relevant memories into every prompt (~20-40ms, CPU-only embedding via all-MiniLM-L6-v2). Cloud providers get full history + memories; local NPU gets summary + recent turns + memories. Memory stripped from cloud calls unless `allow_sensitive_data` enabled. |
 | DD-029 | Qwen3-1.7B confirmed as primary LLM (4B rejected) | 2026-02-27 | Confirmed benchmarks on M.2 + Pi 5: Qwen3-1.7B uses 3.3 GB CMM at 7.38 tok/s (4K context). Qwen3-4B uses 6.2 GB CMM at 3.65 tok/s (2,559 max tokens) — only 691 MB remaining, cannot co-reside with ANY other model. Qwen3-4B is not viable as primary (half the speed, less context, requires serial model swapping for every ASR/TTS call). Qwen3-4B noted as future hot-swap option for heavy local reasoning (requires Pulsar2 v4.2, not yet released). AXERA-TECH catalog (148 models) provides additional options: Qwen3-VL-4B-GPTQ-Int4 as combined LLM+VLM hot-swap, DeepSeek-R1-Distill-Qwen-1.5B as alternative reasoning model. |
+| DD-030 | Voice interaction lifecycle | 2026-03-01 | Complete user-facing interaction model. Session auto-starts on first button press, ends on 5-min idle or explicit farewell (regex-matched, zero LLM cost). Interruption: long-press stops TTS immediately, new push-to-talk interrupts and replaces (interrupted response marked as truncated in history — system tracks what was actually heard vs planned). ASR errors get spoken retry prompts, LLM failures retry then fallback to cloud, TTS failures fall back to LCD text. All state-changing actions get spoken confirmations. "What can you do?" served from pre-defined per-persona templates (zero LLM cost). System prompt persona "Cortex": concise, warm, honest about uncertainty, voice responses <50 tokens. Prompt templates versioned in `config/prompts/`. |
+| DD-031 | Streaming voice pipeline | 2026-03-01 | Sentence-boundary streaming TTS to achieve <5s time-to-first-audio despite 7.38 tok/s LLM speed. Sentence Detector buffers LLM tokens, flushes on sentence-ending punctuation (min 8, max 96 tokens matching Kokoro axmodel limit). TTS Queue synthesizes each sentence via Kokoro as it arrives (~200ms per short sentence at RTF 0.067). LLM and TTS co-resident on NPU — model multiplexing enables parallel generation and synthesis (Phase 0 verification required). Audio chunks played sequentially with 10ms crossfade. Metrics: TTFA, ASR latency, prefill latency, chunk latency, inter-chunk gap. Falls back to sequential mode if NPU multiplexing proves too slow. |
+| DD-032 | Utility tools, scheduling, and notification system | 2026-03-01 | 9 new cognitive tools: clock, timer_query, reminder_query, weather_query, calculator, unit_convert, dictionary_lookup, translate, list_query (pure Python where possible, zero LLM cost). 7 new action templates: timer_set/cancel, reminder_set/cancel, list CRUD (all Tier 1). Scheduling Service: SQLite-backed persistent timers and reminders (`data/schedules.db`), survives reboots, asyncio-based sub-second precision, reminder snooze (max 3). Notification system: 5 priority levels (P0 silent LCD badge → P4 interruptive TTS), delivery via LCD + LED + audio + TTS + web push. Notifications queued during active conversations (except P4). DND mode with quiet hours (P3→P1 during DND, P4 always delivers). |
+| DD-033 | System resilience and health monitoring | 2026-03-01 | HAL-level health monitoring service: NPU temp/CMM, CPU, RAM, storage, battery, network, systemd units — published on ZeroMQ bus. `GET /api/health` endpoint returns component status (healthy/degraded/critical), loaded models, uptime. Four-zone NPU thermal policy: normal (<65°C), warm (65-75°C log), throttle (75-85°C reduce speed), shutdown (>85°C emergency unload). systemd watchdog (30s heartbeat, auto-restart, max 3 in 5min). Graceful degradation matrix: NPU overheat → cool-down pause, all LLM fail → rule-based regex commands only, TTS fail → LCD text fallback, ASR fail → web UI text only, low battery → power saving → clean shutdown. Error UX: never raw errors to user, always human-readable, LCD always shows something even in catastrophic failure. |
 
-*Document version: 0.1.10 — Confirmed NPU benchmarks, Qwen3-4B evaluation, AXERA-TECH catalog*
+*Document version: 0.1.11 — User personas, voice interaction lifecycle, streaming pipeline, utility tools, scheduling, notifications, health monitoring*
 *Status: DRAFT*

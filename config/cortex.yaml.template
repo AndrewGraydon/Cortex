@@ -41,6 +41,17 @@ voice:
   # Pi: hardware button (GPIO 11) hold-to-talk.
   # Web UI: software record button (hold-to-talk or click-start/click-stop).
   max_recording_duration: 30  # seconds — safety limit for recording length
+  session:
+    idle_timeout: 300  # seconds before session ends (matches memory extraction timeout)
+    farewell_patterns: ["goodbye", "that's all", "thanks i'm done", "see you later"]
+  streaming:
+    min_chunk_tokens: 8  # Minimum tokens before TTS (avoid tiny fragments)
+    crossfade_ms: 10  # Audio crossfade between chunks to prevent pops
+    max_queue_depth: 5  # Max TTS chunks queued ahead of playback
+  error_recovery:
+    asr_retry_prompt: true  # "I didn't catch that" on empty/low-confidence ASR
+    llm_retry_count: 1  # Retries before fallback provider
+    tts_fallback_lcd: true  # Show text on LCD if TTS fails
   asr:
     # Provider chain — tries in order. Default: local NPU only.
     providers: [axcl]
@@ -225,6 +236,12 @@ security:
   tier_3_require_confirmation_and_reason: true
   approval_timeout: 60  # seconds
   default_deny_on_timeout: true
+  guest_mode:
+    enabled: false  # Activated by primary user for visitors
+    max_permission_tier: 0  # Guests restricted to Tier 0 only
+    disable_memory_injection: true  # Privacy: no personal memories in guest context
+    disable_iot: true  # No smart home control for guests
+    session_timeout: 1800  # 30 min guest session limit
   audit:
     enabled: true
     retention_days: 90
@@ -271,6 +288,51 @@ web:
     # password_hash set via setup script
   session_timeout: 3600  # seconds
   cors_origins: []  # Restrict to specific origins if needed
+
+scheduling:
+  db_path: data/schedules.db  # SQLite — persists timers/reminders across reboots
+  max_active_timers: 20
+  max_active_reminders: 100
+  snooze_duration: 600  # seconds (10 min default snooze)
+  max_snoozes: 3
+
+notifications:
+  dnd:
+    enabled: false  # Do Not Disturb mode
+    start_hour: 22  # 10 PM
+    end_hour: 7  # 7 AM
+    override_p4: true  # P4 (interruptive) still fires during DND
+  default_priorities:
+    timer_complete: 2  # P2 — chime + LCD
+    reminder_due: 3  # P3 — spoken announcement
+    smart_home_alert: 1  # P1 — visual only
+    system_health: 2  # P2 — chime + LCD
+    approval_timeout: 1  # P1 — visual only
+
+health:
+  enabled: true
+  endpoint: /api/health  # No auth required on local network
+  poll_intervals:
+    npu: 5  # seconds
+    cpu: 10
+    memory: 30
+    storage: 60
+    battery: 30
+    network: 60
+    services: 10
+  watchdog:
+    heartbeat_interval: 10  # seconds
+    systemd_watchdog_sec: 30
+    max_restarts: 3
+    restart_window: 300  # seconds (5 min)
+  thresholds:
+    npu_throttle_temp: 75  # °C — reduce generation speed
+    npu_shutdown_temp: 85  # °C — emergency model unload
+    cpu_throttle_temp: 80
+    ram_warning_pct: 85
+    disk_warning_pct: 90
+    battery_low_pct: 15
+    battery_critical_pct: 5
 
 iot:
   enabled: false  # Enable in Phase 5

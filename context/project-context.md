@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-02-27 (Session 8)
+# Last updated: 2026-02-27 (Session 9)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -75,6 +75,10 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-027 | Tool development pipeline | Structured lifecycle: Specify → Develop → Review → Approve → Deploy. Tools start at Tier 2, promote after supervised use. Sandbox testing, version control, rollback. |
 | DD-028 | Context assembly & memory system | Context Assembler builds prompts in priority order (system → request → tools → memories → summary → history). Rolling summary during TTS playback for 4K NPU coherence. 5 memory tiers with post-session LLM extraction. Automatic semantic retrieval (~20-40ms, CPU embedding) injects memories into prompts. all-MiniLM-L6-v2 + sqlite-vec. |
 | DD-029 | Qwen3-1.7B confirmed, 4B rejected | Confirmed benchmarks: 1.7B = 7.38 tok/s, 3.3 GB CMM. 4B = 3.65 tok/s, 6.2 GB (fills NPU, can't co-reside with anything). 4B as future hot-swap only. AXERA-TECH catalog (148 models) noted for Phase 0 evaluation. |
+| DD-030 | Voice interaction lifecycle | Session management (idle timeout, farewell detection), interruption handling (long-press stop, new-utterance replace), error recovery table (8 failure scenarios), confirmation feedback patterns, capability discovery (per-persona zero-LLM templates), system prompt persona guidelines |
+| DD-031 | Streaming voice pipeline | Sentence-boundary streaming with parallel TTS to mitigate 7.38 tok/s latency. Sentence detector buffers tokens until punctuation, Kokoro synthesizes in parallel via NPU multiplexing. TTFA target <5s. Sequential fallback if multiplexing fails. |
+| DD-032 | Utility tools, scheduling & notifications | 9 new cognitive tools (clock, calculator, weather, etc.), SQLite-backed scheduling service for timers/reminders (survives reboots), 5-level notification priority system (P0 silent → P4 interruptive) with DND mode and conversation-aware queueing |
+| DD-033 | System resilience & health monitoring | Health monitoring service (7 components, ZeroMQ bus), /api/health endpoint, 4-zone NPU thermal management, systemd watchdog, graceful degradation matrix (8 failure scenarios with defined UX), error UX principles |
 
 ## Architecture
 Seven-layer stack:
@@ -124,6 +128,14 @@ Seven-layer stack:
 - Rolling conversation summary: generated during TTS playback (NPU idle), ~100 tokens, updated every 3 exchanges. Hides latency. Abandoned if user interrupts — fallback to raw recent turns. Not required for correctness.
 - Memory extraction: post-session LLM call extracts atomic facts + events from conversation summary → embeds on CPU → stores in sqlite-vec. Dedup via cosine similarity > 0.85. Also: regex-based in-conversation capture for explicit "remember..." requests.
 - Embedding model: all-MiniLM-L6-v2 via ONNX Runtime on CPU (~22MB, 384-dim, ~10-20ms/embed). sqlite-vec brute-force KNN sufficient for <50K entries. NPU reserved for LLM/ASR/TTS.
+- Streaming voice pipeline: sentence-boundary detection buffers LLM tokens until `.!?:;—` + whitespace (min 8, max 96 tokens per chunk). Kokoro TTS synthesizes sentence N while LLM generates sentence N+1 via NPU model multiplexing. 10ms crossfade between audio chunks. TTFA ~4.4s for typical 3-sentence response (ASR 0.5s + prefill 1s + first sentence gen 2.5s + TTS 0.2s).
+- Voice session lifecycle: starts on first button press, ends on 5-min idle timeout or farewell regex match. One active voice session; web UI concurrent per auth user. Interruption: long-press during TTS stops audio, new press during TTS replaces response (interrupted text marked as truncated in history, per LiveKit pattern).
+- User personas: Primary User (full admin, voice+web), Household Member (Tier 0-1 auto, never sees config), Guest (Tier 0 only, no memory injection, no IoT, time-limited), Remote User (full access via authenticated web UI).
+- Notification priority: P0 silent (LCD badge), P1 visual (LCD+LED), P2 chime (LCD+LED+tone), P3 spoken (waits for conversation end), P4 interruptive (immediate, safety-only). DND mode downgrades P3→P1. Notifications queued during active conversation (P0-P3).
+- Scheduling service: SQLite-backed timers and reminders (data/schedules.db), asyncio scheduling, survives reboots. Snooze up to 3 times. Timer countdown shown on LCD idle screen.
+- Health monitoring: 7 components polled at 5-60s intervals, metrics on ZeroMQ bus, /api/health endpoint (no auth on LAN). NPU thermal zones: <65°C normal, 65-75°C warn, 75-85°C throttle, >85°C emergency shutdown. Watchdog: systemd 30s, max 3 restarts in 5 min.
+- Graceful degradation: LLM fail → regex-matched utility commands still work; TTS fail → LCD text; ASR fail → web UI text input; network down → transparent for local; battery <15% → reduce brightness; battery <5% → clean shutdown; storage full → disable logging/extraction.
+- Industry comparison (Session 9): Cortex compared against Alexa, Google Home, Siri, Home Assistant Voice, OVOS, Willow, Pipecat, LiveKit Agents, Jan.ai, AnythingLLM, LangGraph, CrewAI, OpenAI Agents SDK. Architecture is solid; gaps were in moment-to-moment user experience (now addressed by DD-030-033).
 
 ## Open Questions (to resolve during Phase 0)
 1. ~~Can SenseVoice + Qwen3-1.7B + Kokoro + SmolVLM2 all co-reside in 8GB NPU CMM?~~ Resolved: budget is ~4.75GB, fits with ~2.3GB headroom.
@@ -157,14 +169,16 @@ Cortex/
 - **Session 6 (2026-02-27):** Five design corrections: (1) Camera service changed from USB/V4L2 to CSI/libcamera/picamera2 (DD-024). (2) SenseVoice ASR rationale documented — 10-20x faster than Whisper on NPU due to non-autoregressive architecture (DD-023). (3) Wake word removed entirely — unnecessary with button-first and no VAD (DD-025). (4) Context management simplified to provider-managed — no centralized budget scaling (DD-026). (5) Tool development pipeline added to Agent Factory — Specify→Develop→Review→Approve→Deploy lifecycle with promotion system (DD-027). Fixed stale Phase 1 (VAD→button, MeloTTS→Kokoro) and Phase 4 (wake word→tool pipeline) references. Updated scope doc to v0.1.8.
 - **Session 7 (2026-02-27):** Designed complete conversation context and memory system (DD-028). Context Assembly Pipeline builds prompts in priority order with 7 tiers. Rolling conversation summary generated during TTS playback for 4K NPU coherence. Five memory tiers detailed: working (RAM), short-term (SQLite conversation summaries), long-term (sqlite-vec atomic facts with embeddings), episodic (events/outcomes), tool (filesystem). Post-session LLM-based extraction captures facts/events. Automatic semantic retrieval (~20-40ms, CPU-only embedding via all-MiniLM-L6-v2) injects relevant memories into every prompt. Cloud provider privacy: memories stripped unless allow_sensitive_data enabled. Updated scope doc to v0.1.9.
 - **Session 8 (2026-02-27):** Confirmed NPU benchmarks from AXERA-TECH and M5Stack docs (DD-029). Qwen3-1.7B confirmed as primary: 7.38 tok/s, 3.3 GB CMM, 4K context. Qwen3-4B evaluated and rejected as primary: 3.65 tok/s, 6.2 GB CMM (fills NPU, only 691 MB remaining — can't co-reside with any model). Noted as future hot-swap option (Pulsar2 v4.2 required). Discovered AXERA-TECH catalog (148 models on HuggingFace) — broader than M5Stack's official list. Updated model allocation tables with confirmed benchmarks, corrected latency budget (7.38 tok/s, not 12-15). Added Qwen3-VL-4B-GPTQ-Int4 to vision hot-swap pool. Updated scope doc to v0.1.10.
+- **Session 9 (2026-02-27):** Comprehensive industry comparison — evaluated Cortex design against commercial (Alexa, Google, Siri), open-source (Home Assistant Voice, OVOS, Willow, Pipecat, LiveKit), and framework (LangGraph, CrewAI, OpenAI Agents SDK) systems. Architecture found solid but user-facing interaction had gaps. Created 4 user personas (Primary User, Household Member, Guest, Remote User). Added DD-030: Voice interaction lifecycle (sessions, interruptions, error recovery, confirmations, capability discovery, persona guidelines). DD-031: Streaming voice pipeline (sentence-boundary TTS streaming, TTFA <5s target, NPU multiplexing). DD-032: Utility tools, scheduling & notifications (9 new cognitive tools, SQLite timer/reminder service, 5-level notification priority with DND). DD-033: System resilience & health monitoring (7-component monitoring, /api/health, thermal zones, watchdog, graceful degradation matrix). Updated phases 1-6 and success criteria. Updated scope doc to v0.1.11.
 
 ### NEXT SESSION — Resume Here
 **Topic:** TBD — discuss with user. Possible next topics:
 - **Phase 0 hardware setup:** Begin actual hardware assembly and driver validation on the Pi 5
+- **Agent architecture refinement:** Detail super agent YAML definitions, draft initial `config/agents/` files
 - **Detailed action template design:** Flesh out the built-in action templates for Phase 2
 - **Security layer deep-dive:** Ensure §4.5 security architecture aligns with action engine and tool pipeline
 - **Display UI deep-dive:** Detail the LCD render pipeline, display state machine, and status screen layouts
-- **Super agent YAML definitions:** Draft the initial agent config files for `config/agents/`
+- **System prompt drafting:** Create initial `config/prompts/system_v1.txt` persona templates
 
 ---
 
