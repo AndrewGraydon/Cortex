@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-03-02 (Session 12)
+# Last updated: 2026-03-02 (Session 13)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -106,8 +106,8 @@ Seven-layer stack:
 7. Display UI (Whisplay LCD states, button mapping, LED status)
 
 ## Implementation Phases
-- **Phase 0** — Hardware foundation (CURRENT)
-- **Phase 1** — Voice loop (button activation + ASR + LLM + TTS end-to-end)
+- **Phase 0** — Hardware foundation (COMPLETE)
+- **Phase 1** — Voice loop (CURRENT — Milestones 1.1, 1.2, 2.1 complete)
 - **Phase 2** — Agent core (tools, permissions, audit, sandbox)
 - **Phase 3** — Web UI
 - **Phase 4** — Dynamic capabilities (tool pipeline, agent factory, long-term memory)
@@ -183,13 +183,24 @@ Seven-layer stack:
 Cortex/
 ├── docs/design/         # Scope and architecture docs
 ├── docs/guides/         # Setup and operational guides
-├── docs/architecture/   # Detailed layer specs (to be created)
-├── docs/decisions/      # ADRs (to be created)
 ├── context/             # This file and other context docs
-├── src/cortex/          # Application source (to be created)
-├── tests/               # Test suites (to be created)
-├── config/              # Config files (to be created)
-├── scripts/             # Utility scripts
+├── src/cortex/          # Application source
+│   ├── config.py        # Pydantic config loading cortex.yaml
+│   ├── cli.py           # Click CLI entry point
+│   ├── hal/             # Hardware Abstraction Layer
+│   │   ├── protocols.py # NpuService, AudioService, DisplayService, ButtonService
+│   │   ├── types.py     # ModelHandle, InferenceIO, AudioData, DisplayState, etc.
+│   │   └── npu/mock.py  # MockNpuService (realistic timing, error injection)
+│   ├── voice/types.py   # VoiceState, ASRResult, LLMChunk, TTSChunk, LatencyMetrics
+│   └── ipc/             # ZeroMQ message bus
+│       ├── messages.py  # CortexMessage (JSON + ZMQ multipart)
+│       └── bus.py       # MessageBus (pub/sub)
+├── tests/               # Test suites (68 passing)
+│   ├── unit/            # Off-Pi tests
+│   └── hardware/        # Pi-only tests (pytest -m hardware)
+├── config/              # Config files
+├── scripts/             # Utility scripts (dev-setup.sh)
+├── Makefile             # dev, lint, format, test, test-hw
 ├── models/              # Local model storage (gitignored)
 └── data/                # Runtime data (gitignored)
 ```
@@ -211,15 +222,18 @@ Cortex/
 
 - **Session 12 (2026-03-02):** Phase 0 hardware validation — complete. Installed AXCL runtime (`axclhost` v3.6.5, 6 DKMS kernel modules). Verified NPU: AX650N, 7040 MiB CMM, firmware V3.6.4. Diagnosed PiSugar I2C issue — hardware not physically connected (pogo pins), pisugar-server disabled. Verified all peripherals: LCD color cycling (ST7789 SPI), RGB LEDs (PWM), button (active-HIGH, correcting previous active-low assumption), speaker (440Hz tone), microphone (record/playback). Tested all models with measured benchmarks: Qwen3-0.6B (13.74 tok/s, 2,011 MiB), Qwen3-1.7B (7.70 tok/s, 3,375 MiB), SenseVoice (RTF 0.028, 251 MiB), Kokoro (RTF 0.115 Python, 232 MiB), FastVLM-0.5B (792 MiB). Total 4-model co-resident: ~4.95 GB (29.7% headroom). Key findings: Kokoro and FastVLM have no C++ AXCL aarch64 binary — must use Python/pyaxengine path (slower but functional). SenseVoice has streaming axmodel (Moonshine not needed). AXCL binary doesn't support speculative decoding or grammar-guided constrained generation. Added DD-045 (FastVLM-0.5B replaces SmolVLM2-500M). Updated Phase 0 guide with comprehensive §0.8 Model Setup Notes covering every model codebase's gotchas. Updated scope doc to v0.1.15 with all measured values. Phase 0 exit criteria: all met except final commit.
 
+- **Session 13 (2026-03-02):** Phase 1 implementation begun — completed Milestones 1.1, 1.2, and 2.1 (all dev-machine work). Created comprehensive Phase 1 plan covering 4 pre-code investigations + 15 milestones across 4 parts. **Milestone 1.1 (Scaffolding):** Updated pyproject.toml (sounddevice, click, pydantic-settings, pytest-cov, types-PyYAML, pre-commit, uvloop pi extra, CLI entry point, hardware marker). Created Makefile (dev/lint/format/test/test-hw/test-cov/clean), scripts/dev-setup.sh, .pre-commit-config.yaml. Created config.py (Pydantic models matching cortex.yaml.template with YAML loading and search path discovery). Created cli.py (Click: cortex run/config/version). Fixed build backend (setuptools.build_meta), added py.typed marker. **Milestone 1.2 (Types/Protocols):** hal/types.py (ModelHandle, InferenceInputs/Outputs, NpuStatus, NpuCapabilities, AudioData, AudioFormat, DisplayState, LedColor, ButtonGesture, ButtonEvent). hal/protocols.py (NpuService, AudioService, DisplayService, ButtonService — all runtime_checkable Protocols). voice/types.py (VoiceState, ASRResult, LLMChunk, TTSChunk, LatencyMetrics with computed properties, VoiceSession). ipc/messages.py (CortexMessage with JSON + ZeroMQ multipart serialization). ipc/bus.py (MessageBus wrapping pyzmq pub/sub with topic filtering). **Milestone 2.1 (MockNpuService):** hal/npu/mock.py — full NpuService Protocol implementation with Phase 0 measured timing (ASR 50ms, LLM 7.70 tok/s with 1s prefill, TTS RTF 0.115), streaming LLM token generation, memory tracking matching measured model sizes, configurable error injection (MockError). Full ASR→LLM→TTS pipeline cycle tested. **68 tests passing**, ruff + mypy strict clean. `make lint && make test` verified.
+
 ### NEXT SESSION — Resume Here
-**Topic:** Phase 0 is complete. Begin Phase 1 — Voice Loop. Possible next topics:
-- **Phase 1 kickoff:** Project scaffolding — `pyproject.toml`, `src/cortex/` package, ruff + mypy + pytest config, pre-commit hooks
-- **Development environment:** virtualenv setup, `MockNpuService` for off-Pi testing, `scripts/dev-setup.sh`
-- **NpuService Protocol spec:** Draft the full Python Protocol class and AxclNpuService implementation plan
-- **Service architecture:** systemd units, ZeroMQ IPC, data directory setup
-- **Voice pipeline design:** Detailed implementation plan for button → ASR → LLM → TTS → speaker
-- **Display UI deep-dive:** Detail the LCD render pipeline, display state machine, and status screen layouts
-- **System prompt drafting:** Create initial `config/prompts/system_v1.txt` persona templates
+**Topic:** Phase 1 continues. Investigations 0A-0D on Pi hardware, then HAL services.
+- **Investigation 0A (CRITICAL):** NPU model invocation strategy — can pyaxengine invoke all models, or must we wrap C++ binaries?
+- **Investigation 0B (HIGH):** Max token limit — is 2,047 configurable?
+- **Investigation 0C (MEDIUM):** NPU model multiplexing — can LLM and TTS interleave?
+- **Investigation 0D (MEDIUM):** ALSA audio from Python — sounddevice vs alsaaudio
+- **Milestone 2.2:** AxclNpuService (real NPU inference, depends on 0A)
+- **Milestone 2.3:** AudioService (mic capture + speaker playback, depends on 0D)
+- **Milestone 2.4:** DisplayService + ButtonService (LCD, gestures, LEDs)
+- **Milestone 2.5:** ZeroMQ IPC + systemd units
 
 ---
 

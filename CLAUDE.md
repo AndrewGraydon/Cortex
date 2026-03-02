@@ -12,7 +12,9 @@ Privacy-first, local-first, with optional secure external access.
 - **Config template:** `config/cortex.yaml.template`
 
 ## Current Phase
-**Phase 0 — Hardware Foundation.** Assembling hardware, installing drivers, running validation tests. No application code yet — all `src/` modules are stubs.
+**Phase 1 — Voice Loop.** Building button → ASR → LLM → TTS → speaker pipeline.
+Milestones 1.1 (scaffolding), 1.2 (types/protocols), 2.1 (MockNpuService) complete.
+Next: Pi hardware investigations (0A-0D), then HAL services (2.2-2.5).
 
 ## Architecture
 Seven-layer stack (HAL → Voice → Reasoning → Agent → Security → Web UI → Display UI).
@@ -34,11 +36,19 @@ bubblewrap sandbox, systemd services. LCD display adapted from PiSugar whisplay-
 - sherpa-onnx for ASR with AXCL backend
 - Debian 12 Bookworm on Raspberry Pi OS
 
+## Development
+- `make dev` — create venv, install deps, set up pre-commit
+- `make lint` — ruff check + format check + mypy
+- `make test` — run unit tests (no Pi needed)
+- `make test-hw` — run hardware tests (Pi only)
+- CLI: `cortex run`, `cortex config`, `cortex version`
+
 ## Code Style
 - Linter: ruff (target Python 3.11, 100-char line length)
 - Type checking: mypy (strict mode)
-- Tests: pytest with pytest-asyncio
+- Tests: pytest with pytest-asyncio (68 tests passing)
 - Logging: structlog (structured JSON)
+- All HAL interfaces via Protocol classes in `hal/protocols.py`
 
 ## Conventions
 - Update `context/project-context.md` when making significant design decisions
