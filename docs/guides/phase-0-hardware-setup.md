@@ -211,7 +211,9 @@ arecord -D plughw:<CARD>,0 -f S16_LE -r 16000 -c 1 -d 5 test_mic.wav
 # Load SenseVoice → record CMM
 # Load Qwen3-1.7B → record CMM
 # Load Kokoro-82M → record CMM (expect ~237 MiB)
-# Can all 3 co-exist? Target total < 4.5GB (expect ~4.25GB)
+# Load SmolVLM2-500M → record CMM (expect ~500 MiB)
+# Can all 4 co-exist? Target total < 4.75GB
+# Record: individual sizes, total, remaining CMM headroom
 ```
 
 ### Test 5: Battery Under Load
@@ -226,9 +228,93 @@ arecord -D plughw:<CARD>,0 -f S16_LE -r 16000 -c 1 -d 5 test_mic.wav
 # All addresses still visible?
 ```
 
+### Test 7: TTS Quality Validation (Kokoro)
+```bash
+# Load Kokoro-82M on NPU
+# Feed test sentences: "Hello, how are you today?", "The weather is sunny and warm."
+# Play output through Whisplay speaker
+# Record: RTF (expect ~0.067), audio quality (intelligibility), NPU memory
+# Test at least 3 different voice IDs (e.g., af_heart, am_adam, bf_emma)
+```
+
+### Test 8: Vision Model (SmolVLM2-500M)
+```bash
+git clone https://huggingface.co/AXERA-TECH/SmolVLM2-500M-ax650 --depth 1
+# Load SmolVLM2-500M on NPU
+# Feed test image (any JPEG/PNG with identifiable objects)
+# Record: inference time, description quality, NPU memory usage
+```
+
+### Test 9: CSI Camera (if hardware available)
+```bash
+# If CSI camera module is attached:
+python3 -c "
+from picamera2 import Picamera2
+cam = Picamera2()
+cam.start()
+cam.capture_file('test_capture.jpg')
+cam.stop()
+print('Capture successful')
+"
+# Verify: image quality, capture latency
+# If no camera: mark as SKIPPED in checklist
+```
+
 ---
 
-## 0.6 Completion Checklist
+## 0.6 Phase 0 Investigations
+
+These are research questions, not pass/fail tests. Document findings for each.
+
+### Investigation 1: Speculative Decoding
+**Question:** Does AXCL runtime support draft/verify pattern (Qwen3-0.6B drafts, Qwen3-1.7B verifies)?
+```bash
+# Load both Qwen3-0.6B and Qwen3-1.7B simultaneously
+# Check AXCL API docs for draft_model / speculative_decoding parameters
+# If supported: measure tok/s improvement and verify output quality
+# Expected result: likely NOT supported (AXCL is inference-only, not training-aware)
+```
+**Result:** supported / not supported / partially supported
+**Notes:** ___
+
+### Investigation 2: Constrained Generation
+**Question:** Does AXCL support grammar-guided or logit-biased decoding for structured tool call output?
+```bash
+# Test axcl-run with logit_bias parameter (if available)
+# Test if llama.cpp GBNF grammar support works via AXCL backend
+# Alternative: test if output can be constrained via stop tokens
+# Expected result: limited (stop tokens likely, full grammar unlikely)
+```
+**Result:** full grammar / logit bias only / stop tokens only / not supported
+**Notes:** ___
+
+### Investigation 3: Moonshine ASR
+**Question:** Is Moonshine Tiny (26MB) a viable complement to SenseVoice for streaming partial transcription?
+```bash
+pip install moonshine-onnx
+# Run Moonshine on CPU with test audio
+# Compare: WER vs SenseVoice, latency profile, streaming capability
+# Key question: can it provide partial results while button is held?
+```
+**Result:** viable complement / not competitive / interesting but not needed
+**Notes:** ___
+
+### Investigation 4: Unified Multimodal (Qwen3-VL-2B)
+**Question:** Can Qwen3-VL-2B replace both Qwen3-1.7B (LLM) and SmolVLM2-500M (VLM) as a single model?
+```bash
+git clone https://huggingface.co/AXERA-TECH/Qwen3-VL-2B-ax650 --depth 1
+# Test 1: Text-only tool calling accuracy (compare vs Qwen3-1.7B)
+#   Run same prompts, compare function call output
+# Test 2: Vision quality (compare vs SmolVLM2-500M)
+#   Same test images, compare description quality
+# Note: 7.80 tok/s, 3.7 GB — fits but uses more memory than 1.7B
+```
+**Result:** viable replacement / text inferior / vision inferior / memory concern
+**Notes:** ___
+
+---
+
+## 0.7 Completion Checklist
 
 ```
 HARDWARE VALIDATION
@@ -236,18 +322,24 @@ HARDWARE VALIDATION
 [ ] NPU detected via lspci and axcl-smi
 [ ] Whisplay LCD, mic, speaker, buttons, LEDs all working
 [ ] PiSugar reports battery and charging state
+[ ] CSI camera captures image (or SKIPPED if no camera)
+[ ] I2C stable under NPU load
 
 NPU METRICS (fill in actual values)
-Total CMM:           _______ MiB
-SenseVoice size:     _______ MiB
-Qwen3-1.7B size:     _______ MiB
-Kokoro-82M size:     _______ MiB (expected ~237 MiB)
-All 3 co-resident:   YES / NO (total: _______ MiB, expected ~4250 MiB)
-Qwen3-0.6B tok/s:    _______
-Qwen3-1.7B tok/s:    _______
-SenseVoice RTF:      _______
-NPU idle temp:       _______°C
-NPU load temp:       _______°C
+Total CMM:              _______ MiB
+SenseVoice size:        _______ MiB
+Qwen3-1.7B size:        _______ MiB
+Kokoro-82M size:        _______ MiB (expected ~237 MiB)
+SmolVLM2-500M size:     _______ MiB (expected ~500 MiB)
+All 4 co-resident:      YES / NO (total: _______ MiB, expected ~4750 MiB)
+Qwen3-0.6B tok/s:       _______
+Qwen3-1.7B tok/s:       _______
+SmolVLM2-500M inf time:  _______ ms
+SenseVoice RTF:          _______
+Kokoro RTF:              _______ (expected ~0.067)
+Kokoro audio quality:    GOOD / ACCEPTABLE / POOR
+NPU idle temp:           _______°C
+NPU load temp:           _______°C
 
 POWER METRICS
 Battery capacity:    _______ mAh
@@ -255,6 +347,12 @@ Active drain:        _______% / min → _______ min runtime
 Idle drain:          _______% / min → _______ min runtime
 Under-voltage:       YES / NO
 Stable under load:   YES / NO
+
+INVESTIGATIONS
+Speculative decoding:     supported / not supported / partial
+Constrained generation:   full grammar / logit bias / stop tokens / not supported
+Moonshine ASR:            viable / not competitive / not needed
+Unified multimodal (VL-2B): viable / text inferior / vision inferior / memory issue
 
 SYSTEM
 OS:                  _______

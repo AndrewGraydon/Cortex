@@ -8,6 +8,8 @@ system:
   timezone: UTC  # Set to your timezone
 
 hal:
+  # IPC: ZeroMQ pub/sub and req/rep. Topic convention: {service}.{event_type}
+  # e.g., power.state_changed, button.gesture, npu.model_loaded, audio.level
   npu:
     device_id: 0
     axcl_json: /etc/axcl.json
@@ -328,9 +330,22 @@ web:
   host: "0.0.0.0"  # Will be restricted by nftables
   port: 8080
   auth:
-    enabled: true
-    # password_hash set via setup script
-  session_timeout: 3600  # seconds
+    enabled: true  # Phase 1-2: no auth on LAN. Phase 3+: bcrypt password + session cookie.
+    # password_hash set via scripts/setup.sh (bcrypt, stored in .env as CORTEX_PASSWORD_HASH)
+    session:
+      timeout_local: 3600  # seconds (1h for LAN clients)
+      timeout_remote: 1800  # seconds (30min for remote/HTTPS clients)
+      cookie_name: cortex_session
+      cookie_secure: false  # Set true when behind HTTPS reverse proxy
+      cookie_samesite: strict  # CSRF protection
+    totp:
+      enabled: false  # Optional TOTP 2FA for remote access (Phase 3+)
+      # Secret set via scripts/setup.sh, stored in .env as CORTEX_TOTP_SECRET
+    csrf:
+      enabled: true  # Double-submit token + SameSite=Strict
+    api_key:
+      enabled: false  # For MCP/A2A integrations (Phase 3+)
+      # Key stored in .env as CORTEX_API_KEY
   cors_origins: []  # Restrict to specific origins if needed
 
 scheduling:
@@ -436,6 +451,16 @@ external_services:
     enabled: false
     provider: caldav_vtodo  # caldav_vtodo, todoist
     # Todoist API key in .env: TODOIST_API_KEY
+  contacts:
+    enabled: true  # Local-only contact store (no external provider required)
+    db_path: data/contacts.db
+    fuzzy_match_threshold: 0.7  # Name matching sensitivity (0-1)
+    # Optional: CardDAV sync (Phase 5)
+    # carddav:
+    #   enabled: false
+    #   url: ""  # e.g., http://localhost:5232 (Radicale)
+    #   username: ""
+    #   # password in .env: CARDDAV_PASSWORD
 
 # --- Wyoming Protocol Bridge ---
 # Expose Cortex's ASR/TTS to Home Assistant as Wyoming services.

@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-03-02 (Session 10)
+# Last updated: 2026-03-02 (Session 11)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -87,6 +87,9 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-039 | Knowledge store & document RAG | Sixth memory tier: Knowledge Store (SQLite + sqlite-vec, persistent). Document ingestion via web UI upload or watched directory. ~200-token chunks with 50-token overlap, same all-MiniLM-L6-v2 embedding. knowledge_search tool gets real backend. Supported formats: txt, md, pdf, html. Phase 4. |
 | DD-040 | Power-aware operation profiles | 4 profiles: mains (1.7B, full polling), battery (0.6B, 2x intervals), low_battery (0.6B, 4x intervals), critical (regex-only, no LLM). Auto-transition via Power Service ZeroMQ events. Manual override via voice. Phase 1 design, Phase 2 auto-switching. |
 | DD-041 | NPU hardware abstraction | NpuService Protocol class with generic numpy I/O. No AXCL-specific types at interface level. All AXCL specifics isolated inside AxclNpuService. Future: HailoNpuService (Pi AI HAT+ 2), MockNpuService (testing). Design discipline enforced from Phase 1. |
+| DD-042 | Web authentication & session management | Phase 1-2: no auth on LAN. Phase 3: bcrypt password + HTTP-only session cookie. Phase 3+: HTTPS (Caddy) + optional TOTP 2FA. Server-side sessions in SQLite. Persona mapping via auth state. No JWT/OAuth (overkill for single-user). |
+| DD-043 | Process & service architecture | Single main process (cortex-core.service, asyncio/uvloop) + separate HAL processes (cortex-npu, cortex-audio, cortex-display). All IPC via ZeroMQ (JSON, topic convention {service}.{event_type}). Minimizes RAM and IPC latency. |
+| DD-044 | Operational lifecycle | git clone + pip install deployment. Lightweight SQL migration system (numbered files, no Alembic). Backup/restore scripts (data/ + config/ + .env, excludes models/). structlog JSON → stdout → systemd journal. |
 
 ## Architecture
 Seven-layer stack:
@@ -153,6 +156,12 @@ Seven-layer stack:
 - Conversational clarification: confidence-gated orchestrator (threshold 0.6) asks for clarification instead of misrouting. Escalating repair ladder: rephrase question → offer options → explicit help request. Max 2 rounds per turn.
 - Power-aware profiles: 4 tiers (mains/battery/low_battery/critical) auto-switch model, polling intervals, and display brightness based on PiSugar power state. Critical mode = regex-only, no LLM.
 - NPU hardware abstraction: NpuService Protocol class with numpy I/O, no AXCL types at interface. Enables future HailoNpuService (Pi AI HAT+ 2) without changing higher layers.
+- Web authentication (DD-042): Phase 1-2 no auth on LAN (trusted network). Phase 3: bcrypt-hashed password + secure HTTP-only session cookie, server-side in SQLite. Phase 3+ remote: HTTPS via Caddy reverse proxy, optional TOTP 2FA (pyotp). No JWT (overkill), no OAuth (unnecessary for self-hosted). Persona mapping: authenticated session → Primary/Remote User, unauthenticated LAN → Household Member (Tier 0-1), Guest → manual toggle. API: /api/health unauthenticated, all other endpoints require session or API key.
+- Process & service architecture (DD-043): Single main process (cortex-core.service) runs Python asyncio/uvloop with FastAPI + agent framework + voice pipeline + scheduling + memory. Separate HAL processes: cortex-npu.service (AXCL runtime), cortex-audio.service (ALSA), cortex-display.service (LCD/buttons/LEDs). Optional cortex-wyoming.service. All IPC via ZeroMQ with JSON messages, topic convention {service}.{event_type}. Single main process minimizes RAM and IPC latency.
+- Operational lifecycle (DD-044): Deployment via git clone + pip install -e . in virtualenv. Updates via scripts/update.sh (git pull + pip + restart). Lightweight SQL migration: numbered files in data/migrations/, schema_version table, applied on startup (no Alembic). Backup via scripts/backup.sh (tarball of data/ + config/ + .env, excludes models/). Logging: structlog JSON → stdout → systemd journal.
+- Contact store: Local SQLite (data/contacts.db) backing contact_lookup cognitive tool. Schema: id, name, phone, email, notes, timestamps. Input via voice regex capture, web UI form (Phase 3), optional CardDAV sync (Phase 5). Privacy: local-only, never sent to cloud.
+- Voice user identification limitation: Cortex does NOT perform speaker identification in Phases 1-5. All voice treated as Primary User unless Guest Mode manually activated. Household Member restrictions only via authenticated Web UI (Phase 3+). Multi-speaker voice ID is Phase 6+ stretch goal.
+- Design audit findings (Session 11): 6 genuine gaps (auth, voice ID, contact store, Phase 0 tests, process architecture, ops lifecycle), 3 internal inconsistencies (missing DD-006-010, USB→CSI, IoT phase table), and several minor detail gaps. All addressed in v0.1.13.
 
 ## Open Questions (to resolve during Phase 0)
 1. ~~Can SenseVoice + Qwen3-1.7B + Kokoro + SmolVLM2 all co-reside in 8GB NPU CMM?~~ Resolved: budget is ~4.75GB, fits with ~2.3GB headroom.
@@ -190,12 +199,14 @@ Cortex/
 
 - **Session 10 (2026-03-02):** Second-pass gap analysis comparing Cortex v0.1.11 against 2025-2026 AI assistant landscape and OpenClaw. Found 12 gaps — 8 became design decisions, 4 became Phase 0 investigation items. Key user insight: PTT voice is fundamentally the same interaction pattern as messaging — when users say "What's on my calendar?" they expect it to work. Added DD-034: Conversational clarification & repair (confidence-gated orchestrator, slot filling, disambiguation, repair ladder). DD-035: External services integration / PIM (CalDAV calendar, ntfy/Pushover messaging, IMAP/SMTP email, task sync — new `pim` super agent). DD-036: A2A protocol support (client+server, complementary to MCP). DD-037: Wyoming protocol bridge (expose SenseVoice/Kokoro to Home Assistant). DD-038: Proactive intelligence engine (pattern detection, morning briefings, think loop). DD-039: Knowledge store & document RAG (sixth memory tier). DD-040: Power-aware operation profiles (4 tiers, auto-switching). DD-041: NPU hardware abstraction (NpuService Protocol, no AXCL at interface). Phase 0 investigations added: speculative decoding, constrained generation, Moonshine ASR, unified multimodal. Updated scope doc to v0.1.12.
 
+- **Session 11 (2026-03-02):** Comprehensive design audit of v0.1.12 (44 DDs, 1849 lines). Found 6 genuine gaps, 3 internal inconsistencies, and several minor detail gaps. Fixed all inconsistencies: recovered missing DD-006–010 in §9 log, changed "USB camera" → "CSI camera" (2 locations), aligned IoT phase table with phase plan (MQTT/REST/HA → Phase 5, Matter/BLE → Future), corrected DD-015 "15 tok/s" → "7.38 tok/s", fixed HAL "gRPC or Unix socket" → "ZeroMQ". Added DD-042: Web authentication & session management (bcrypt + session cookie, phase-gated, persona mapping). DD-043: Process & service architecture (single main process + separate HAL services, ZeroMQ IPC). DD-044: Operational lifecycle (deployment, migration, backup/restore, logging). Added contact store spec, voice user identification limitation note. Updated Phase 0 guide with Tests 7-9 (Kokoro TTS, SmolVLM2-500M vision, CSI camera) and 4 investigation procedures (speculative decoding, constrained generation, Moonshine ASR, unified multimodal). Updated config template (auth details, contacts section, ZeroMQ topic convention). Updated scope doc to v0.1.13.
+
 ### NEXT SESSION — Resume Here
-**Topic:** TBD — discuss with user. Possible next topics:
+**Topic:** Review phases for readiness, then begin Phase 0 hardware setup. Possible next topics:
+- **Phase readiness review:** Walk through each phase plan to verify all prerequisites, dependencies, and deliverables are well-defined
 - **Phase 0 hardware setup:** Begin actual hardware assembly and driver validation on the Pi 5
 - **Agent architecture refinement:** Detail super agent YAML definitions, draft initial `config/agents/` files
 - **Detailed action template design:** Flesh out the built-in action templates for Phase 2
-- **Security layer deep-dive:** Ensure §4.5 security architecture aligns with action engine and tool pipeline
 - **Display UI deep-dive:** Detail the LCD render pipeline, display state machine, and status screen layouts
 - **System prompt drafting:** Create initial `config/prompts/system_v1.txt` persona templates
 - **External services protocol design:** Detail the Service Adapter Protocol interfaces for CalDAV, ntfy, IMAP

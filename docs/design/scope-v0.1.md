@@ -1,5 +1,5 @@
 # Project Cortex — Agentic Local LLM Voice Assistant
-## System Design Scope Document v0.1.12
+## System Design Scope Document v0.1.13
 
 ---
 
@@ -25,6 +25,8 @@ Four personas anchor the interaction design. Each maps to a permission level and
 **Guest:** Temporary access, no persistence. Cannot trigger any Tier 1+ actions without primary user approval. Cannot access memory (personal facts about the household). Cannot control IoT devices. Can ask general knowledge questions, get the time, and have basic conversation. Guest mode activated explicitly by the primary user (voice command or web UI toggle). When active, long-term memory injection is disabled and the system prompt includes privacy constraints.
 
 **Remote User:** The primary user accessing from outside the local network via the authenticated web UI (§4.6.2). Same capabilities as local primary user, but voice input goes through browser microphone and TTS plays through browser audio. Latency is higher (network round-trip) but functionality is identical. Requires authentication (§4.5). Cannot use physical button gestures but all software equivalents are available.
+
+**Voice User Identification (Phases 1-5):** Cortex does not perform speaker identification. All voice interactions on the physical Pi are treated as the Primary User unless Guest Mode is manually activated by the primary user. The Household Member persona's permission restrictions (Tier 0-1 auto) apply only when that user accesses the Web UI with their own authenticated session (Phase 3+). Multi-speaker voice identification (via 3D-Speaker-MT or similar NPU model) is a Phase 6+ stretch goal — see AXERA-TECH catalog for available speaker verification models.
 
 ---
 
@@ -75,6 +77,37 @@ Four personas anchor the interaction design. Each maps to a permission level and
 └─────────────────────────────────────────────────────────┘
 ```
 
+### 3.1 Process & Service Architecture
+
+Cortex runs as a small set of systemd-managed processes communicating over ZeroMQ.
+
+```
+cortex-core.service (main process)
+  ├── FastAPI server (web UI, API, MCP server, A2A server)
+  ├── Agent framework (orchestrator, super agents, action engine)
+  ├── Voice pipeline controller (coordinates ASR → LLM → TTS)
+  ├── Scheduling service (asyncio timers/reminders)
+  ├── Notification queue
+  └── Memory & knowledge services
+
+cortex-npu.service (HAL — separate process)
+  └── AXCL runtime, model loading, inference queue
+
+cortex-audio.service (HAL — separate process)
+  └── ALSA capture/playback, audio routing
+
+cortex-display.service (HAL — separate process)
+  └── LCD render loop, button gesture recognition, LED control
+
+cortex-wyoming.service (optional — separate process)
+  └── Wyoming STT/TTS TCP listeners
+```
+
+**Design rationale:**
+- **Single main process:** The core service runs as one Python asyncio event loop (uvloop). FastAPI, the agent framework, voice pipeline orchestration, scheduling, and memory all share a single process. This minimizes RAM overhead (~50-100MB vs hundreds of MB for separate microservices) and eliminates serialization latency for internal calls.
+- **Separate HAL processes:** NPU, audio, and display services run as dedicated systemd units. The NPU service requires a dedicated process because the AXCL runtime manages its own memory context. Audio and display services benefit from independent restart (a display crash doesn't kill the voice pipeline).
+- **IPC protocol:** All inter-process communication uses ZeroMQ (DD-008). Messages are JSON-encoded for human readability and debuggability (adequate throughput for Pi 5 use case — audio data excepted, which uses shared memory or pipe). Topic naming convention: `{service}.{event_type}` (e.g., `power.state_changed`, `button.gesture`, `npu.model_loaded`, `health.npu_thermal`).
+
 ---
 
 ## 4. Layer Specifications
@@ -84,7 +117,7 @@ Four personas anchor the interaction design. Each maps to a permission level and
 **Purpose:** Single point of access to all hardware. No other layer touches GPIO, PCIe, I2C, SPI, or I2S directly.
 
 **Components:**
-- **NPU Service** — Wraps AXCL Runtime (Python bindings). Manages model loading/unloading on NPU memory, inference queuing, and NPU health monitoring (temperature, memory, utilization). Exposes a local gRPC or Unix socket API.
+- **NPU Service** — Wraps AXCL Runtime (Python bindings). Manages model loading/unloading on NPU memory, inference queuing, and NPU health monitoring (temperature, memory, utilization). Exposes a ZeroMQ req/rep API for inference requests and pub/sub for status events.
 - **Audio Service** — Manages WM8960 codec via ALSA. Handles mic input (16kHz mono for ASR), speaker output, volume control, and audio routing (internal speaker vs external via XH2.0).
 - **Display Service** — Drives Whisplay LCD via SPI (ST7789 controller). Provides framebuffer abstraction for UI rendering. Manages RGB LEDs and button input events.
 - **Power Service** — Interfaces with PiSugar 3 Plus power manager daemon. Reports battery level, charging state, estimated runtime. Triggers power-saving modes. Provides RTC access.
@@ -1153,6 +1186,23 @@ For sending messages or alerts to the user's mobile when not at the Pi:
 - "Add milk to my shopping list" → if external sync enabled, creates task in Todoist/CalDAV AND updates local list
 - Local lists (§4.4.11 Scheduling Service) always work offline; external sync is additive
 
+**Contacts:**
+
+Local contact store backing the `contact_lookup` cognitive tool (§4.4.6). Stored in SQLite (`data/contacts.db`).
+
+| Field | Type | Purpose |
+|---|---|---|
+| `id` | UUID | Primary key |
+| `name` | text (required) | Contact name (fuzzy-matchable) |
+| `phone` | text | Phone number |
+| `email` | text | Email address |
+| `notes` | text | Free-form notes |
+| `created_at` / `updated_at` | datetime | Timestamps |
+
+- **Adding contacts:** Voice ("remember Sarah's phone number is 555-1234" → regex pattern capture → creates contact entry), web UI form (Phase 3), optional CardDAV sync (Phase 5, reuses CalDAV adapter infrastructure)
+- **Querying:** `contact_lookup` searches by name (fuzzy match via LIKE), phone, or email. Returns matching contacts for the PIM super agent.
+- **Privacy:** Contacts are local-only; never sent to cloud providers unless `allow_sensitive_data: true`
+
 **Service Adapter Protocol:**
 ```python
 class ExternalServiceAdapter(Protocol):
@@ -1362,6 +1412,40 @@ Every action is logged with:
 
 Logs stored in append-only format. Queryable via web UI. Exportable as JSON/CSV.
 
+#### 4.5.6 Web Authentication & Session Management
+
+**Phase 1-2 (local only):** No web authentication on LAN — local network access is implicitly trusted (same posture as `/api/health`). The Pi is a personal device on a home network. API endpoints available without login.
+
+**Phase 3 (web UI launch):**
+- bcrypt-hashed password set during initial setup wizard (`scripts/setup.sh`)
+- Secure HTTP-only session cookie (SameSite=Strict, Secure flag when HTTPS)
+- Server-side sessions stored in SQLite (`data/cortex.db` sessions table) — allows server-side invalidation
+- Session timeout: 1 hour local (configurable), 30 minutes remote (configurable)
+- CSRF protection: SameSite=Strict cookie + double-submit token on state-changing requests
+- No JWT — overkill for a single-user self-hosted system (no distributed verification needed)
+- No OAuth — unnecessary complexity; Cortex is not a multi-tenant service
+
+**Phase 3+ (remote access):**
+- HTTPS required when remote access is enabled — recommended via Caddy reverse proxy (auto Let's Encrypt) or manual TLS cert
+- Optional TOTP-based 2FA via `pyotp` — presented after password, configurable in settings
+- Same session cookie mechanism, transported over TLS
+
+**Persona Mapping via Authentication:**
+
+| Access Method | Auth State | Persona | Permission Level |
+|---|---|---|---|
+| Voice (physical Pi) | N/A (no speaker ID) | Primary User | Full (all tiers) |
+| Web UI (LAN, authenticated) | Valid session | Primary User | Full (all tiers) |
+| Web UI (LAN, unauthenticated) | No session (Phase 1-2 only) | Household Member | Tier 0-1 auto |
+| Web UI (remote, authenticated) | Valid session over HTTPS | Remote User | Full (all tiers) |
+| Web UI (remote, no auth) | Rejected | — | No access |
+| Voice (Guest Mode active) | N/A | Guest | Tier 0 only |
+
+**API Authentication:**
+- `/api/health` — unauthenticated (monitoring endpoint)
+- All other API endpoints — require valid session cookie or API key header (`X-API-Key`)
+- API keys: generated via web UI or `scripts/setup.sh`, stored hashed in `data/cortex.db`. Used for MCP server, A2A server, and external automation integrations.
+
 ---
 
 ### 4.6 User Interfaces
@@ -1370,7 +1454,7 @@ Logs stored in append-only format. Queryable via web UI. Exportable as JSON/CSV.
 
 - **Button-driven interaction** — all input through the single Whisplay button (GPIO 11). No always-on microphone, no VAD.
 - **Hold to talk** — audio captured only while button is held. Sent to ASR on release. Zero false activations, zero privacy concerns.
-- **Double-click for vision** — captures image from USB camera and sends to VLM for analysis. Response spoken via TTS.
+- **Double-click for vision** — captures image from CSI camera and sends to VLM for analysis. Response spoken via TTS.
 - Audio feedback: confirmation tones, status sounds, spoken responses via Whisplay speaker.
 - Interrupt support: long press (>2s) interrupts TTS playback or cancels current operation.
 - Multi-turn conversation with context retention (sliding window).
@@ -1408,11 +1492,12 @@ Every capability available on the physical Pi must also be available through the
 - **Security Console** — Permission tier config, network allowlist, audit log viewer.
 - **Settings** — Model selection, voice settings, power management, display preferences.
 
-**Access Control:**
-- Web UI only accessible on local network.
-- Authentication required (local password or PIN).
-- Optional: mTLS for additional security.
-- Session timeout after inactivity.
+**Access Control** (see §4.5.6 for full specification):
+- Phase 1-2: no auth on LAN (local network = trusted)
+- Phase 3+: bcrypt password + session cookie; optional TOTP 2FA for remote access
+- Remote access requires HTTPS (Caddy reverse proxy recommended)
+- API endpoints require session cookie or API key for MCP/A2A integrations
+- Session timeout: 1h local, 30min remote (configurable)
 
 #### 4.6.3 LCD Display Interface
 
@@ -1605,12 +1690,12 @@ The system prompt includes instructions to detect frustration cues in the user's
 
 | Phase | Protocol | Use Cases |
 |---|---|---|
-| Phase 1 | **MQTT** | Most IoT devices, Home Assistant bridge |
-| Phase 1 | **HTTP/REST** | Smart plugs, custom devices, webhooks |
-| Phase 2 | **Home Assistant API** | Full HA integration |
-| Phase 3 | **Matter/Thread** | Native modern smart home protocol |
-| Phase 3 | **Bluetooth LE** | Proximity-based triggers, beacons |
+| Phase 5 | **MQTT** | Most IoT devices, Home Assistant bridge |
+| Phase 5 | **HTTP/REST** | Smart plugs, custom devices, webhooks |
+| Phase 5 | **Home Assistant API** | Full HA integration |
 | Phase 5 | **Wyoming** | Local voice satellite protocol for Home Assistant (STT/TTS provider, optional satellite) |
+| Future | **Matter/Thread** | Native modern smart home protocol |
+| Future | **Bluetooth LE** | Proximity-based triggers, beacons |
 
 #### 4.7.1 Wyoming Protocol Bridge
 
@@ -1694,6 +1779,8 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 - Latency metric collection (TTFA, ASR, prefill, chunk, inter-chunk)
 - Power-aware operation profiles — design and basic mains/battery detection (DD-040)
 - NPU Service Protocol abstraction — hardware-agnostic interface, AXCL implementation (DD-041)
+- Service architecture — systemd units, ZeroMQ IPC, data directory setup (DD-043)
+- Installation scripts (`scripts/install-services.sh`) and initial data directory layout (DD-044)
 
 ### Phase 2 — Agent Core (Weeks 6-9)
 - Tool calling (Hermes templates)
@@ -1716,7 +1803,7 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 - FastAPI backend + WebSocket streaming
 - Chat, dashboard, tool/agent managers
 - Security console
-- Authentication
+- Authentication system — bcrypt password, session cookies, optional TOTP 2FA (DD-042)
 - Settings
 - Notification center in web UI
 - WebSocket notification push + browser notifications (P2+)
@@ -1753,7 +1840,49 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 - Performance optimization
 - Error recovery and graceful degradation testing (fault injection)
 - Hardware watchdog tuning and thermal policy validation
+- Backup/restore scripts and update automation (DD-044)
 - Documentation
+
+### 6.1 Operational Lifecycle
+
+**Deployment:**
+- `git clone` + `pip install -e .` in a Python virtualenv on the Pi
+- systemd unit files installed via `scripts/install-services.sh` (creates `cortex-core`, `cortex-npu`, `cortex-audio`, `cortex-display` services)
+- Initial setup wizard (`scripts/setup.sh`): creates data directories, sets web password, generates `.env` template
+
+**Updates:**
+- `scripts/update.sh`: `git pull` → `pip install -e .` → schema migration check → `systemctl restart cortex-*`
+- No Docker, no apt package — too early in project lifecycle for packaging. Git-based deployment is simplest for a single-device project.
+
+**SQLite Schema Migration:**
+- Numbered SQL files in `data/migrations/` (e.g., `001_initial.sql`, `002_add_knowledge_store.sql`)
+- `schema_version` table in each database tracks applied migrations
+- On startup, `cortex-core` checks version and applies pending migrations in order
+- No Alembic (avoids SQLAlchemy dependency); lightweight and sufficient for SQLite
+
+**Backup & Restore:**
+- `scripts/backup.sh`: creates timestamped tarball of `data/` + `config/` + `.env` → `backups/cortex-YYYYMMDD-HHMMSS.tar.gz`
+- Excludes `models/` (large, re-downloadable from HuggingFace) and `data/sandbox/` (ephemeral)
+- `scripts/restore.sh`: extracts archive, runs pending migrations if schema version differs from current code
+- Recommended: schedule via cron for automated daily backups
+
+**Logging:**
+- `structlog` with JSON output → stdout → captured by systemd journal (`journalctl -u cortex-core`)
+- journald handles log rotation automatically (configurable via `/etc/systemd/journald.conf`)
+- Audit log stored in SQLite (`data/audit.db`) with configurable retention (default 90 days)
+
+**Data Directory Layout:**
+```
+data/
+├── cortex.db          # Long-term memory, episodic memory, short-term memory, sessions
+├── knowledge.db       # Knowledge store document chunks + embeddings
+├── schedules.db       # Timers, reminders
+├── audit.db           # Audit log
+├── contacts.db        # Contact store
+├── knowledge/         # Watched directory for document ingestion
+├── sandbox/           # bubblewrap scratch space (ephemeral)
+└── migrations/        # Numbered SQL migration files
+```
 
 ---
 
@@ -1801,6 +1930,9 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 - Power profile transitions within 5 seconds of charging state change
 - NPU Service Protocol has zero AXCL-specific type imports at the interface level
 - Wyoming STT/TTS services pass Home Assistant compatibility tests
+- Web UI requires authentication for all state-changing operations (Phase 3+)
+- Backup script completes in < 60 seconds for typical data volume
+- Schema migrations apply automatically on startup without data loss
 
 ---
 
@@ -1813,16 +1945,21 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 | DD-003 | Tiered autonomy (4-tier permissions) | 2026-02-27 | Safe actions auto, risky actions need approval |
 | DD-004 | General-purpose assistant focus | 2026-02-27 | Avoids premature domain-specific optimization |
 | DD-005 | Qwen3-1.7B as primary model | 2026-02-27 | Confirmed: 7.38 tok/s, 3.3 GB CMM, 4K context on M.2 + Pi 5. Best balance of speed, memory, and capability. Qwen3-4B rejected (3.65 tok/s, 6.2 GB CMM, fills NPU, see DD-029). Native Hermes tool calling. |
+| DD-006 | FastAPI + HTMX for web UI | 2026-02-27 | Lightweight async server; HTMX for server-driven interactivity with minimal JavaScript. Framework choice deferred to Phase 3 (DD-013) but FastAPI backend confirmed. |
+| DD-007 | SQLite + sqlite-vec for storage | 2026-02-27 | No separate database server; sqlite-vec adds brute-force KNN vector search for memory retrieval without external dependencies. Sufficient for <50K entries on Pi 5. |
+| DD-008 | ZeroMQ for IPC | 2026-02-27 | Brokerless, fast pub/sub and req/rep patterns; lighter than gRPC (protobuf overhead) or D-Bus (heavyweight for simple messaging). JSON message format. |
+| DD-009 | bubblewrap for sandboxing | 2026-02-27 | Near-zero overhead Linux namespace isolation; no daemon required (unlike podman); fine-grained capability control via seccomp-bpf. |
+| DD-010 | systemd for service management | 2026-02-27 | Standard Linux service orchestration; watchdog support, dependency ordering, automatic restart, journal logging integration. |
 | DD-011 | Kokoro-82M as TTS engine (replacing MeloTTS) | 2026-02-27 | 2x faster on NPU (RTF 0.067 vs 0.125), #1 HuggingFace TTS Arena quality, 54 voices, 237MB NPU vs 800MB estimated for MeloTTS, actively maintained, already proven on LLM-8850 |
 | DD-012 | Adapt whisplay-ai-chatbot for LCD display | 2026-02-27 | Proven 30 FPS Pillow+cairosvg renderer on this exact hardware; SVG emoji, smooth scrolling, LED fading; adapt and extend rather than rewrite |
 | DD-013 | Defer web UI framework decision to Phase 3 | 2026-02-27 | Web UI is secondary to voice interface; evaluate HTMX+DaisyUI vs NiceGUI vs Svelte when implementation begins |
 | DD-014 | Custom Python action engine | 2026-02-27 | Zero RAM overhead, in-process, YAML templates + Python handlers; all external engines (n8n 200-860MB, Node-RED 40-80MB, Temporal 2-4GB, Windmill 2-3GB) too heavy for Pi 5 |
-| DD-015 | 3-tier agent hierarchy | 2026-02-27 | Orchestrator (classifier, ~370 tok) → Super Agents (reasoning, 4K context) → Utility Agents (deterministic, 0 LLM tokens); optimized for 1.7B model at 15 tok/s |
+| DD-015 | 3-tier agent hierarchy | 2026-02-27 | Orchestrator (classifier, ~370 tok) → Super Agents (reasoning, 4K context) → Utility Agents (deterministic, 0 LLM tokens); optimized for 1.7B model at 7.38 tok/s |
 | DD-016 | Unconstrained thinking, constrained acting | 2026-02-27 | Agents reason freely with cognitive tools (read-only); world-changing actions go through pre-authorized YAML templates with permission gating and audit logging |
 | DD-017 | Qwen-Agent as library only | 2026-02-27 | NousFnCallPrompt for Qwen3-native tool-call parsing; full frameworks rejected (see DD-018) |
 | DD-018 | Custom framework over CrewAI/LangGraph/AutoGen | 2026-02-27 | CrewAI: 32GB RAM, ChromaDB dep; AutoGen: conversation paradigm fills 4K in 2-3 exchanges; LangGraph: closest but langchain-core bloat for ~500 LOC of graph execution; smolagents: prompt bloat; Swarm: deprecated |
 | DD-019 | MCP protocol support (client + server) | 2026-02-27 | Standard tool interop via Python `mcp` SDK; client discovers external tools (HA, n8n) and maps to cognitive tools or action templates with permission gating; server exposes Cortex tools to external AI clients via Streamable HTTP on FastAPI |
-| DD-020 | Tiered VLM vision system | 2026-02-27 | SmolVLM2-500M always resident (~500MB) for quick image descriptions; hot-swap to InternVL3-1B or Qwen2.5-VL-3B for detailed analysis (unloads LLM temporarily). Three input sources: USB camera (physical), webcam (web UI), image upload (web UI). |
+| DD-020 | Tiered VLM vision system | 2026-02-27 | SmolVLM2-500M always resident (~500MB) for quick image descriptions; hot-swap to InternVL3-1B or Qwen2.5-VL-3B for detailed analysis (unloads LLM temporarily). Three input sources: CSI camera (physical), webcam (web UI), image upload (web UI). |
 | DD-021 | Button-first interaction with Web UI parity | 2026-02-27 | Physical Pi uses Whisplay button (GPIO 11) as sole input — hold=push-to-talk, double-click=camera capture, single-click=approve, long-press=deny/cancel, triple-click=system menu. No VAD anywhere (eliminates false activations and privacy concerns). Web UI provides full parity via software equivalents (record button, webcam/upload, approve/deny buttons). |
 | DD-022 | Configurable model provider layer | 2026-02-27 | All model interactions (LLM, ASR, TTS, VLM) routed through provider-agnostic Protocol interfaces. Seven provider types: axcl (local NPU), openai, anthropic, google, xai, ollama, openai_compatible. Per-profile provider chains with automatic fallback and circuit breaker. Tool calling format adapted transparently per provider via Tool Adapter. Context budgets scale dynamically with provider context window. API keys in .env, cloud calls auto-gated by security layer. Default config is fully offline (axcl only) — cloud/remote providers are opt-in. |
 | DD-023 | SenseVoice-Small as primary ASR engine | 2026-02-27 | Non-autoregressive architecture gives 10-20x lower latency than Whisper-Small on AX8850 NPU (~50-75ms vs ~800-1800ms per utterance). English WER comparable (~3-4% vs 3.4%). Same NPU memory (~500MB). Single axmodel vs Whisper's 3 (faster load/swap). 5 languages vs 99+ (sufficient for primary use). Faster Whisper rejected (CPU-only, can't use NPU). Both SenseVoice and Whisper-Small to be tested in Phase 0 for final confirmation. |
@@ -1844,6 +1981,9 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 | DD-039 | Knowledge store & document RAG | 2026-03-02 | Sixth memory tier: ingested documents (manuals, references, personal notes, saved articles) chunked into ~200-token overlapping segments, embedded via same all-MiniLM-L6-v2 CPU pipeline, stored in sqlite-vec. `knowledge_search` cognitive tool (already defined) gets this as its real backend. With 4K context, RAG is MORE valuable than with large context windows — inject one high-relevance passage instead of hoping it fits. Ingestion: web UI upload or watched directory (`data/knowledge/`). Supported formats: txt, md, pdf, html. Capacity: configurable (default 100 documents). Phase 4. |
 | DD-040 | Power-aware operation profiles | 2026-03-02 | Four profiles: `mains` (full capability — Qwen3-1.7B, full polling, full brightness), `battery` (reduced — Qwen3-0.6B, half polling frequency, 50% brightness), `low_battery` (<15% — minimal polling, 30% brightness), `critical` (<5% — regex-only commands, no LLM inference, LCD text only). Auto-transition via Power Service ZeroMQ events based on PiSugar charging state. Model Router already supports profile switching (§4.3.5). Manual override via voice command. Phase 1 (design), Phase 2 (auto-switching implementation). |
 | DD-041 | NPU hardware abstraction | 2026-03-02 | NPU Service Protocol defined as Python `Protocol` class: `load_model`, `unload_model`, `infer`, `get_status`, `capabilities`. No AXCL-specific types at the interface level — all AXCL specifics isolated inside `AxclNpuService` implementation. Generic numpy array I/O for tensors. Enables future `HailoNpuService` (Raspberry Pi AI HAT+ 2, Hailo-10H, 40 TOPS, 2.5W) and `MockNpuService` (testing) without changing any higher-layer code. Design discipline enforced from Phase 1 when writing the NPU Service. |
+| DD-042 | Web authentication & session management | 2026-03-02 | Phase 1-2: no auth on LAN (local network = trusted). Phase 3: bcrypt-hashed password + secure HTTP-only session cookie (set during setup wizard). Server-side sessions in SQLite. No JWT (overkill for single-user), no OAuth. Remote access: HTTPS required (Caddy reverse proxy), optional TOTP 2FA via pyotp. Persona mapping: authenticated session = Primary/Remote User, unauthenticated LAN = Household Member tier, Guest mode = manual toggle. API key auth for MCP/A2A server endpoints. |
+| DD-043 | Process & service architecture | 2026-03-02 | Single main process (`cortex-core.service`): Python asyncio/uvloop running FastAPI + agent framework + voice pipeline + scheduling + memory. Separate HAL processes: `cortex-npu.service` (AXCL runtime, requires dedicated process context), `cortex-audio.service` (ALSA), `cortex-display.service` (LCD + buttons + LEDs). Optional: `cortex-wyoming.service`. All IPC via ZeroMQ with JSON messages. Topic convention: `{service}.{event_type}`. gRPC/D-Bus rejected (DD-008 already chose ZeroMQ). |
+| DD-044 | Operational lifecycle (backup, update, migration) | 2026-03-02 | Deployment: `git clone` + `pip install -e .` in virtualenv, systemd units via `scripts/install-services.sh`. Updates: `scripts/update.sh` (git pull + pip install + restart). SQLite schema migration: numbered SQL files in `data/migrations/`, version check on startup (no Alembic — avoids SQLAlchemy dep). Backup: `scripts/backup.sh` archives `data/` + `config/` + `.env` (excludes `models/`). Restore: `scripts/restore.sh` with migration reconciliation. Logging: structlog JSON → stdout → systemd journal (journald handles rotation). |
 
-*Document version: 0.1.12 — External services (PIM), A2A/Wyoming protocols, conversational clarification, proactive intelligence, knowledge store, power profiles, NPU abstraction*
+*Document version: 0.1.13 — Auth, process architecture, operational lifecycle, contact store, consistency fixes*
 *Status: DRAFT*
