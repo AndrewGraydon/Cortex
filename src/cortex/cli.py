@@ -41,18 +41,10 @@ def run(ctx: click.Context, mock: bool) -> None:
     """Start the Cortex voice assistant."""
     import asyncio
 
-    import structlog
+    from cortex.utils.logging import configure_logging
 
     cfg = ctx.obj["config"]
-
-    structlog.configure(
-        processors=[
-            structlog.stdlib.add_log_level,
-            structlog.dev.ConsoleRenderer(),
-        ],
-        wrapper_class=structlog.stdlib.BoundLogger,
-        logger_factory=structlog.PrintLoggerFactory(),
-    )
+    configure_logging(log_level=cfg.system.log_level)
 
     click.echo(f"Starting Cortex (log_level={cfg.system.log_level}, mock={mock})...")
 

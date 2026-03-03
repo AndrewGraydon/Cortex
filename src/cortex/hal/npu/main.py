@@ -76,14 +76,9 @@ def main() -> None:
     parser.add_argument("--mock", action="store_true", help="Use MockNpuService")
     args = parser.parse_args()
 
-    structlog.configure(
-        processors=[
-            structlog.stdlib.add_log_level,
-            structlog.dev.ConsoleRenderer(),
-        ],
-        wrapper_class=structlog.stdlib.BoundLogger,
-        logger_factory=structlog.PrintLoggerFactory(),
-    )
+    from cortex.utils.logging import configure_logging
+
+    configure_logging()
 
     asyncio.run(run_npu_service(mock=args.mock))
 

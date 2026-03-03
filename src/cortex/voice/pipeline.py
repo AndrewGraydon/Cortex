@@ -47,6 +47,7 @@ FAREWELL_PATTERNS = {
 # Session timeouts
 SESSION_IDLE_TIMEOUT_S = 300.0  # 5 minutes
 CROSSFADE_SAMPLES = 240  # 10ms at 24kHz
+LLM_MAX_RETRIES = 1  # Retry LLM once on failure
 
 
 class VoicePipeline:
@@ -131,6 +132,7 @@ class VoicePipeline:
 
         This is the core method — ASR → LLM → TTS → playback.
         Returns latency metrics for the interaction.
+        Always returns to IDLE display state, even on early exit or error.
         """
         metrics = LatencyMetrics()
         metrics.button_release_ts = _now_ms()
@@ -170,7 +172,7 @@ class VoicePipeline:
 
             # --- LLM → TTS (streaming) ---
             await self._display.set_state(DisplayState.THINKING, "Thinking...")
-            response_text = await self._run_llm_tts_streaming(asr_result.text, metrics)
+            response_text = await self._run_llm_with_retry(asr_result.text, metrics)
 
             # Add assistant response to history
             if response_text:
@@ -188,8 +190,9 @@ class VoicePipeline:
             logger.exception("Pipeline error")
             await self._display.set_state(DisplayState.ERROR, "Something went wrong")
             await asyncio.sleep(2.0)
+        finally:
+            await self._display.set_state(DisplayState.IDLE)
 
-        await self._display.set_state(DisplayState.IDLE)
         return metrics
 
     # --- Internal handlers ---
@@ -228,6 +231,22 @@ class VoicePipeline:
             text=str(result.data),
             language=result.metadata.get("language", "en"),
         )
+
+    async def _run_llm_with_retry(self, user_text: str, metrics: LatencyMetrics) -> str:
+        """Run LLM → TTS streaming with retry on LLM failure."""
+        for attempt in range(LLM_MAX_RETRIES + 1):
+            try:
+                return await self._run_llm_tts_streaming(user_text, metrics)
+            except Exception:
+                if attempt < LLM_MAX_RETRIES:
+                    logger.warning("LLM failed (attempt %d), retrying...", attempt + 1)
+                    await asyncio.sleep(0.5)
+                else:
+                    logger.exception("LLM failed after %d retries", LLM_MAX_RETRIES + 1)
+                    apology = "Sorry, I'm having trouble thinking right now. Please try again."
+                    await self._speak(apology, metrics)
+                    return apology
+        return ""  # unreachable, satisfies mypy
 
     async def _run_llm_tts_streaming(self, user_text: str, metrics: LatencyMetrics) -> str:
         """Stream LLM → sentence detect → TTS → playback."""
@@ -270,13 +289,19 @@ class VoicePipeline:
         return full_response
 
     async def _synthesize_and_play(self, text: str, metrics: LatencyMetrics) -> None:
-        """TTS a sentence and play it."""
+        """TTS a sentence and play it. Falls back to LCD text if TTS fails."""
         assert self._tts_handle is not None
 
-        result = await self._npu.infer(
-            self._tts_handle,
-            InferenceInputs(data=text),
-        )
+        try:
+            result = await self._npu.infer(
+                self._tts_handle,
+                InferenceInputs(data=text),
+            )
+        except Exception:
+            logger.warning("TTS failed, falling back to LCD text: %s", text)
+            await self._display.set_state(DisplayState.SPEAKING, text)
+            await asyncio.sleep(max(1.0, len(text.split()) * 0.3))
+            return
 
         if metrics.tts_first_chunk_ts == 0.0:
             metrics.tts_first_chunk_ts = _now_ms()
