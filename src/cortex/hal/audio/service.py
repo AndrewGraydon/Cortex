@@ -106,8 +106,24 @@ class AlsaAudioService:
             samples = np.zeros(0, dtype=np.int16)
 
         self._capture_buffer = []
+
+        # Remove DC offset (WM8960 ADC has persistent ~300-600 bias)
+        if len(samples) > 0:
+            dc_offset = int(np.mean(samples))
+            if abs(dc_offset) > 10:
+                samples = np.clip(
+                    samples.astype(np.int32) - dc_offset, -32768, 32767
+                ).astype(np.int16)
+                logger.debug("DC offset removed: %d", dc_offset)
+
         duration = len(samples) / self._capture_rate
-        logger.info("Capture stopped: %.2fs, %d samples", duration, len(samples))
+        peak = int(np.max(np.abs(samples))) if len(samples) > 0 else 0
+        logger.info(
+            "Capture stopped: %.2fs, %d samples, peak=%d",
+            duration,
+            len(samples),
+            peak,
+        )
 
         return AudioData(
             samples=samples,
