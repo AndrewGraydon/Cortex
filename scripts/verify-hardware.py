@@ -187,7 +187,7 @@ async def test_button() -> bool:
 # ---------------------------------------------------------------------------
 async def test_audio() -> bool:
     print_header("Test 3: Audio Capture & Playback")
-    print_info("Capture device: hw:0,0 (WM8960 mic, 16kHz mono)")
+    print_info("Capture device: default (ALSA plug→dsnoop, 16kHz mono)")
     print_info("Playback device: default (ALSA dmix, 24kHz)")
     print()
 

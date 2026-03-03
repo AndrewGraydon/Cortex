@@ -1,8 +1,12 @@
 """ALSA audio service — mic capture and speaker playback via sounddevice.
 
 Hardware: WM8960 codec on PiSugar Whisplay HAT.
-Capture: 16kHz mono S16_LE on hw:0,0 (DD-049).
+Capture: 16kHz mono S16_LE via ALSA 'default' device (plug→dsnoop, stereo→mono).
 Playback: 24kHz S16_LE via ALSA 'default' device (dmix resamples 24kHz→48kHz).
+
+Note: The WM8960 hardware requires 2-channel capture. The /etc/asound.conf on the
+Pi configures 'default' capture through a plug→dsnoop chain that handles stereo
+capture and channel conversion. Do NOT use 'hw:0,0' directly with channels=1.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CAPTURE_RATE = 16000
 DEFAULT_PLAYBACK_RATE = 24000
-DEFAULT_CAPTURE_DEVICE = "hw:0,0"
+DEFAULT_CAPTURE_DEVICE = "default"
 DEFAULT_PLAYBACK_DEVICE = "default"
 PLAYBACK_BLOCKSIZE = 1024  # ~43ms at 24kHz
 

@@ -97,7 +97,7 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-046 | Mixed NPU invocation architecture | LLM uses C++ binary (`main_axcl_aarch64`) + tokenizer HTTP server (port 12345). ASR/TTS/VLM use pyaxengine `InferenceSession` directly. FastVLM's `InferManager` proves pure-Python LLM inference possible (future optimization). |
 | DD-047 | 2,047 token hard limit confirmed | Baked into compiled axmodel. Tokenizer says 131K (irrelevant). config.json is 0 bytes. Requires Pulsar2 recompile to change. Context budget: ~1,200 input + ~800 generation tokens. |
 | DD-048 | NPU multiplexing confirmed (~0ms switch) | Co-resident models interleave with negligible overhead. Tested 10 rounds: SenseVoice 128.6ms + Kokoro 18.6ms alternating. Streaming pipeline (DD-031) confirmed feasible. |
-| DD-049 | Audio via sounddevice + ALSA default device | Capture: 16kHz on hw:0,0. Playback: WM8960 lacks native 24kHz — use ALSA `default` device (dmix resampler handles 24kHz→48kHz). sounddevice sufficient, alsaaudio not needed. |
+| DD-049 | Audio via sounddevice + ALSA default device | Capture: 16kHz mono via ALSA `default` device (plug→dsnoop handles stereo WM8960 hw). WM8960 hw requires 2-channel capture — do NOT use `hw:0,0` with channels=1. Playback: ALSA `default` (dmix resamples 24kHz→48kHz). DC offset removal in software (~300-600 ADC bias). Mixer: Capture=63, Boost=2(+20dB), ALC=OFF, HPF=on, NoiseGate=on. |
 
 ## Architecture
 Seven-layer stack:
