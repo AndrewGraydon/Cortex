@@ -17,8 +17,8 @@ CARD=0
 echo "Configuring WM8960 mixer on card $CARD for voice capture..."
 
 # --- Capture path ---
-# PGA gain: 55/63 (~+23.75dB)
-amixer -c $CARD cset name='Capture Volume' 55,55 > /dev/null
+# PGA gain: 63/63 (max, ~+29.75dB)
+amixer -c $CARD cset name='Capture Volume' 63,63 > /dev/null
 amixer -c $CARD cset name='Capture Switch' on,on > /dev/null
 
 # Input boost: 2 = +20dB via LINPUT1
@@ -31,14 +31,11 @@ amixer -c $CARD cset name='Right Boost Mixer RINPUT1 Switch' on > /dev/null
 amixer -c $CARD cset name='ADC PCM Capture Volume' 195,195 > /dev/null
 amixer -c $CARD cset name='ADC High Pass Filter Switch' on > /dev/null
 
-# ALC (Automatic Level Control) — stereo, moderate
-amixer -c $CARD cset name='ALC Function' 3 > /dev/null  # Stereo
-amixer -c $CARD cset name='ALC Max Gain' 4 > /dev/null
-amixer -c $CARD cset name='ALC Min Gain' 0 > /dev/null
-amixer -c $CARD cset name='ALC Target' 5 > /dev/null
-amixer -c $CARD cset name='ALC Attack' 3 > /dev/null
-amixer -c $CARD cset name='ALC Decay' 3 > /dev/null
-amixer -c $CARD cset name='ALC Hold Time' 0 > /dev/null
+# ALC (Automatic Level Control) — disabled
+# ALC compresses speech signal too aggressively on WM8960.
+# With Capture=63 + Boost=2, peak speech reaches ~7000/32767 (~22%)
+# which is ideal for 16-bit ADC headroom without clipping.
+amixer -c $CARD cset name='ALC Function' 0 > /dev/null  # Off
 
 # Noise gate
 amixer -c $CARD cset name='Noise Gate Switch' on > /dev/null
