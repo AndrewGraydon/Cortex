@@ -2,39 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
-import pytest
 
-from cortex.hal.audio.mock import MockAudioService
-from cortex.hal.display.mock import MockButtonService, MockDisplayService
-from cortex.hal.npu.mock import MockNpuService
 from cortex.hal.types import AudioData, AudioFormat, DisplayState
 from cortex.voice.pipeline import VoicePipeline
-
-
-@pytest.fixture
-async def pipeline() -> VoicePipeline:
-    """Create a fully wired voice pipeline with mock services."""
-    npu = MockNpuService()
-    audio = MockAudioService()
-    display = MockDisplayService()
-    button = MockButtonService()
-
-    # Load models
-    asr_handle = await npu.load_model("sensevoice", Path("/mock/sensevoice"))
-    llm_handle = await npu.load_model("qwen3-1.7b", Path("/mock/qwen3"))
-    tts_handle = await npu.load_model("kokoro", Path("/mock/kokoro"))
-
-    pipe = VoicePipeline(
-        npu=npu,
-        audio=audio,
-        display=display,
-        button=button,
-    )
-    pipe.set_handles(asr=asr_handle, llm=llm_handle, tts=tts_handle)
-    return pipe
 
 
 class TestProcessUtterance:
