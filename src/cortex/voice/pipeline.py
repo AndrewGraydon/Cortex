@@ -64,12 +64,14 @@ class VoicePipeline:
         display: Any,
         button: Any,
         system_prompt: str = "You are Cortex, a helpful voice assistant. Be concise.",
+        agent_processor: Any = None,
     ) -> None:
         self._npu = npu
         self._audio = audio
         self._display = display
         self._button = button
         self._system_prompt = system_prompt
+        self._agent_processor = agent_processor
 
         # Model handles (set after loading)
         self._asr_handle: ModelHandle | None = None
@@ -161,8 +163,31 @@ class VoicePipeline:
                 await self._speak("I didn't catch that. Could you try again?", metrics)
                 return metrics
 
-            # Check for farewell
-            if self._is_farewell(asr_result.text):
+            # --- Agent routing (Phase 2) ---
+            if self._agent_processor is not None:
+                agent_resp = await self._agent_processor.process(
+                    asr_result.text, self._session, self._npu
+                )
+
+                # Farewell — end session
+                if agent_resp.intent_id == "farewell":
+                    await self._speak(agent_resp.text, metrics)
+                    self._session = None
+                    return metrics
+
+                # Utility — direct response, no LLM
+                if not agent_resp.used_llm and agent_resp.text:
+                    self._session.history.append({"role": "user", "content": asr_result.text})
+                    await self._speak(agent_resp.text, metrics)
+                    self._session.history.append({"role": "assistant", "content": agent_resp.text})
+                    self._session.turn_count += 1
+                    self._session.metrics.append(metrics)
+                    return metrics
+
+                # LLM fallback — continue to existing streaming path below
+
+            # Check for farewell (legacy path when no agent processor)
+            elif self._is_farewell(asr_result.text):
                 await self._speak("Goodbye!", metrics)
                 self._session = None
                 return metrics

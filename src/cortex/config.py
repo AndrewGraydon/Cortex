@@ -125,9 +125,101 @@ class ButtonConfig(BaseModel):
 class ReasoningConfig(BaseModel):
     default_profile: str = "chat"
     max_tokens: int = 512
+    max_context_tokens: int = 2047
     temperature: float = 0.7
     system_prompt_version: str = "v1"
     profiles: dict[str, Any] = Field(default_factory=dict)
+
+
+# --- Agent Config ---
+
+
+class AgentConfig(BaseModel):
+    enabled: bool = True
+    max_tool_iterations: int = 2
+    confidence_threshold: float = 0.6
+    actions_dir: str = "config/actions"
+
+
+# --- Security Config ---
+
+
+class AuditConfig(BaseModel):
+    enabled: bool = True
+    db_path: str = "data/audit.db"
+    retention_days: int = 90
+
+
+class ApprovalConfig(BaseModel):
+    timeout_seconds: float = 60.0
+    default_deny_on_timeout: bool = True
+
+
+class SecurityConfig(BaseModel):
+    audit: AuditConfig = Field(default_factory=AuditConfig)
+    approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
+
+
+# --- Memory Config ---
+
+
+class ShortTermMemoryConfig(BaseModel):
+    retention_days: int = 30
+    max_conversations: int = 100
+
+
+class LongTermMemoryConfig(BaseModel):
+    max_entries: int = 10000
+    similarity_threshold: float = 0.3
+    dedup_threshold: float = 0.85
+    auto_inject_count: int = 3
+    embedding_dimensions: int = 384
+
+
+class MemoryConfig(BaseModel):
+    db_path: str = "data/memory.db"
+    extraction_idle_timeout: int = 300
+    regex_patterns: bool = True
+    short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
+    long_term: LongTermMemoryConfig = Field(default_factory=LongTermMemoryConfig)
+
+
+# --- Scheduling Config ---
+
+
+class SchedulingConfig(BaseModel):
+    db_path: str = "data/schedules.db"
+    max_active_timers: int = 20
+    max_active_reminders: int = 100
+    snooze_duration: int = 600
+    max_snoozes: int = 3
+
+
+# --- Notification Config ---
+
+
+class DndConfig(BaseModel):
+    enabled: bool = False
+    start_hour: int = 22
+    end_hour: int = 7
+
+
+class NotificationConfig(BaseModel):
+    dnd: DndConfig = Field(default_factory=DndConfig)
+    timer_complete_priority: int = 2
+    reminder_due_priority: int = 3
+    system_health_priority: int = 2
+
+
+# --- Health Config ---
+
+
+class HealthConfig(BaseModel):
+    enabled: bool = True
+    endpoint: str = "/api/health"
+    npu_poll_interval: int = 5
+    cpu_poll_interval: int = 10
+    memory_poll_interval: int = 30
 
 
 # --- System Config ---
@@ -151,6 +243,12 @@ class CortexConfig(BaseModel):
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     button: ButtonConfig = Field(default_factory=ButtonConfig)
     reasoning: ReasoningConfig = Field(default_factory=ReasoningConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    scheduling: SchedulingConfig = Field(default_factory=SchedulingConfig)
+    notifications: NotificationConfig = Field(default_factory=NotificationConfig)
+    health: HealthConfig = Field(default_factory=HealthConfig)
 
 
 # --- Config search paths (in priority order) ---

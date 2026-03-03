@@ -62,6 +62,7 @@ class MockNpuService:
     _errors: list[MockError] = field(default_factory=list)
     _response_index: int = 0
     _memory_used_mb: int = 0
+    _asr_text: str | None = None
 
     # Model memory sizes (from Phase 0 measurements)
     _model_sizes: dict[str, int] = field(
@@ -73,6 +74,10 @@ class MockNpuService:
             "fastvlm-0.5b": 792,
         }
     )
+
+    def set_asr_text(self, text: str) -> None:
+        """Set the text that mock ASR will return on next inference."""
+        self._asr_text = text
 
     def inject_error(self, error: MockError) -> None:
         """Add an error to be triggered on next matching operation."""
@@ -177,7 +182,7 @@ class MockNpuService:
     async def _mock_asr(self, inputs: InferenceInputs) -> InferenceOutputs:
         """Mock ASR — returns canned text after realistic delay."""
         await asyncio.sleep(MOCK_ASR_LATENCY_S)
-        text = inputs.params.get("mock_text", "Hello, how are you?")
+        text = self._asr_text or inputs.params.get("mock_text", "Hello, how are you?")
         return InferenceOutputs(
             data=text,
             metadata={

@@ -115,9 +115,9 @@ class AlsaAudioService:
         if len(samples) > 0:
             dc_offset = int(np.mean(samples))
             if abs(dc_offset) > 10:
-                samples = np.clip(
-                    samples.astype(np.int32) - dc_offset, -32768, 32767
-                ).astype(np.int16)
+                samples = np.clip(samples.astype(np.int32) - dc_offset, -32768, 32767).astype(
+                    np.int16
+                )
                 logger.debug("DC offset removed: %d", dc_offset)
 
         duration = len(samples) / self._capture_rate
