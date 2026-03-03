@@ -21,11 +21,13 @@ Next: Phase 3 — Web UI (FastAPI + HTMX/Svelte, auth, external services, A2A).
 Seven-layer stack (HAL → Voice → Reasoning → Agent → Security → Web UI → Display UI).
 See `docs/design/scope-v0.1.md` for full spec.
 
-## Design Decisions (DD-001 through DD-049)
+## Design Decisions (DD-001 through DD-050)
 Key choices: Python 3.11+, Qwen3-1.7B primary LLM (7.70 tok/s measured), Kokoro-82M TTS,
 SenseVoice ASR, FastVLM-0.5B VLM (DD-045), FastAPI backend, SQLite + sqlite-vec, ZeroMQ IPC,
 bubblewrap sandbox, systemd services. Audio via ALSA `default` device (DD-049, NOT hw:0,0).
 LCD display adapted from PiSugar whisplay-ai-chatbot (Pillow + cairosvg + SPI).
+Script-based tools with progressive disclosure (DD-050) — TOOL.yaml + scripts/ folders as
+alternative to Python handler classes, inspired by Anthropic's Claude Skills architecture.
 
 ## Related Repositories
 - **Kokoro TTS on LLM-8850:** https://github.com/AndrewGraydon/kokoro.LM8850
@@ -54,7 +56,7 @@ LCD display adapted from PiSugar whisplay-ai-chatbot (Pillow + cairosvg + SPI).
 ## Conventions
 - Update `context/project-context.md` when making significant design decisions
 - Design decisions use IDs: DD-NNN with date and rationale
-- Scope doc version bumps on changes (currently v0.1.18)
+- Scope doc version bumps on changes (currently v0.1.20)
 - Hardware metrics go in `docs/guides/phase-0-hardware-setup.md` completion checklist
 - Models stored in `models/` (gitignored), runtime data in `data/` (gitignored)
 - No secrets in config files — use `.env` (gitignored)

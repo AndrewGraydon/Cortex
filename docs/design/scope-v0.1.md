@@ -729,6 +729,102 @@ async def set_light_state(
 - All executions logged to audit system: template_id, parameters, caller, result, timing
 - Templates are version-controlled and can be rolled back
 
+**Script-based tools (DD-050):**
+
+In addition to Python handler classes, tools can be defined as **self-contained folders** with a YAML schema and executable scripts. This lowers the barrier for creating new tools — no Python class boilerplate, no import into the codebase.
+
+```
+tools/
+  weather-check/
+    TOOL.yaml          # Schema: name, description, parameters, tier
+    scripts/run.py     # Entry point — receives JSON args on stdin, returns JSON on stdout
+    scripts/validate.py  # Optional: deterministic parameter validation
+    references/        # Optional: detailed docs (never injected into LLM context)
+```
+
+**TOOL.yaml format:**
+```yaml
+# tools/weather-check/TOOL.yaml
+name: weather-check
+description: Check current weather for a location
+version: 1
+permission_tier: 1
+
+# Optional regex triggers for IntentRouter — zero LLM cost routing.
+# When user speech matches any trigger pattern, the tool is invoked directly
+# without an LLM call. If omitted, tool is only available via LLM tool selection.
+triggers:
+  - '(?:what.s|how.s|check)\s+(?:the\s+)?weather'
+  - 'weather\s+(?:in|at|for)\s+\w+'
+
+# Optional keywords for pre-filtering when too many tools to inject all schemas.
+# IntentRouter uses keyword overlap to narrow candidates before LLM selection.
+keywords: [weather, forecast, temperature, rain, sunny]
+
+parameters:
+  location:
+    type: string
+    required: true
+    description: "City name or coordinates"
+
+entry_point: scripts/run.py
+timeout_seconds: 10
+```
+
+**Auto-discovery and registration:**
+The ToolRegistry scans `tools/*/TOOL.yaml` at startup (and on hot-reload signal). For each discovered tool:
+1. YAML parsed → tool registered in registry (alongside Python handler tools)
+2. `triggers` patterns (if present) registered with IntentRouter → zero-LLM direct routing
+3. `keywords` (if present) registered for pre-filtering → reduces LLM schema injection to relevant candidates
+4. Short schema generated (~30-50 tokens) for P3 context injection when LLM routing is needed
+
+New tools dropped into `tools/` are available on next startup or hot-reload — no code changes, no imports, no redeployment.
+
+**Three routing paths (zero to minimal LLM cost):**
+| Path | Trigger | LLM Cost | Latency |
+|---|---|---|---|
+| **Regex match** | User speech matches a `triggers` pattern | 0 tokens | ~0ms |
+| **Keyword pre-filter + LLM** | Keywords narrow candidates → LLM picks from 2-3 tools | ~200-400 tokens (one call) | ~2-4s |
+| **Full LLM selection** | No keyword match → all tool schemas injected | ~400-800 tokens (one call) | ~2-4s |
+
+For a library of 20+ tools, keyword pre-filtering prevents blowing the 2,047-token budget — only 2-3 candidate schemas are injected instead of all 20.
+
+**Progressive disclosure for 2,047-token budget:**
+| Level | Content | When loaded | Token cost |
+|---|---|---|---|
+| **1. Schema** | Name + short description from TOOL.yaml | Always for regex/keyword routing; P3 for LLM candidates | ~30-50 tokens |
+| **2. Instructions** | Full TOOL.yaml parameters + usage notes | When tool is selected by router | ~100-200 tokens |
+| **3. References** | Detailed docs in `references/` folder | Never in LLM context — for scripts and humans only | 0 tokens |
+
+Key insight from Anthropic's Skills architecture: *"Code is deterministic; language interpretation isn't."* Validation scripts check parameters without burning LLM tokens. Formatting scripts produce consistent output without relying on the LLM to format correctly. This is especially valuable within the 2,047-token budget where every token counts.
+
+**Script execution model:**
+- Scripts receive arguments as JSON on stdin, return results as JSON on stdout
+- Stderr captured for error messages
+- Timeout enforced (default 10s)
+- Exit code 0 = success, non-zero = failure
+- Phase 3: script tools restricted to Tier 0-1 (auto-approved, read-only) — no sandbox required
+- Phase 4: Tier 2+ script tools run inside bubblewrap sandbox
+
+**Relationship to MCP:**
+MCP provides **connectivity** (what tools are available). Script-based tools provide **workflow knowledge** (how to orchestrate multi-step sequences). A script tool can chain MCP calls:
+
+```yaml
+# tools/calendar-event/TOOL.yaml
+name: calendar-event
+description: Create calendar event with conflict checking
+permission_tier: 1
+mcp_dependencies: [calendar]  # Requires calendar MCP server
+
+steps:
+  - tool: calendar_query
+    params: {date: "$date", duration: "$duration"}
+    validate: scripts/check_conflicts.py
+  - tool: calendar_create
+    params: {title: "$title", date: "$date", duration: "$duration"}
+  - confirm: "Created {title} on {date}"
+```
+
 #### 4.4.6 Cognitive Tools
 
 Cognitive tools help super agents **think** — they are read-only, safe (Tier 0-1), and consume minimal context. They do NOT change the world.
@@ -773,29 +869,31 @@ The LLM can create new super agents and action templates dynamically:
 - All dynamically created agents/templates are version-controlled and can be rolled back
 - User can create, modify, and delete agents via voice or web UI
 
-**Tool Development Pipeline** — Tools (action templates) follow a structured lifecycle before deployment:
+**Tool Development Pipeline** — Tools follow a structured lifecycle before deployment. Both **Python handler tools** (compiled classes implementing the Tool protocol) and **script-based tools** (TOOL.yaml + scripts/ folder, DD-050) go through the same pipeline:
 
 | Stage | Actor | Output | Gate |
 |---|---|---|---|
 | **Specify** | User or LLM | Tool spec: name, description, inputs/outputs, permission tier, dependencies | User review |
-| **Develop** | LLM (or user) | YAML action template + Python handler implementation | Automated: ruff lint, mypy type check, static security analysis |
+| **Develop** | LLM (or user) | Python handler class OR TOOL.yaml + scripts/ folder | Automated: ruff lint, mypy type check (Python), static security analysis |
 | **Review** | Automated + User | Test results, security scan report, dependency audit | All checks pass |
 | **Approve** | User (Tier 3) | Signed approval with reason | Explicit user confirmation via button or web UI |
 | **Deploy** | System | Template registered, handler loaded, available to agents | Audit log entry |
 
-- **Spec-first:** Every tool starts as a specification (what it does, what it needs, what tier it requires) before any code is written. The LLM can draft specs from natural language requests.
-- **Sandbox testing:** During Review, the handler runs in a bubblewrap sandbox against synthetic inputs. Must pass without errors or policy violations.
+- **Two tool formats:** Python handler classes for performance-critical or complex tools; script-based TOOL.yaml folders for simpler tools, user-created tools, and MCP workflow orchestration (DD-050). Both formats are first-class citizens in the registry and pipeline.
+- **Spec-first:** Every tool starts as a specification (what it does, what it needs, what tier it requires) before any code is written. The LLM can draft specs from natural language requests. For script-based tools, the LLM generates a TOOL.yaml + entry point script — significantly less code than a full Python class.
+- **Sandbox testing:** During Review, the handler runs in a bubblewrap sandbox against synthetic inputs. Must pass without errors or policy violations. Script-based tools are inherently easier to sandbox (subprocess with controlled stdin/stdout).
 - **Rollback:** Deployed tools are version-controlled. Any version can be rolled back or disabled instantly. Rollback is Tier 1 (auto-approved, logged).
 - **Promotion path:** Tools start at Tier 2 (require approval per-use). After N successful supervised executions (configurable, default 10), the user can promote to Tier 1 (auto-approved, logged) or Tier 0 (auto, silent).
-- **Discovery:** The factory exposes a tool catalog (via web UI and voice) showing all tools with status (draft/review/approved/deployed/disabled), version, usage stats, and permission tier.
+- **Discovery:** The factory exposes a tool catalog (via web UI and voice) showing all tools with status (draft/review/approved/deployed/disabled), version, usage stats, permission tier, and format (python/script).
 
 #### 4.4.8 MCP Protocol Support
 
 Cortex supports the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) as both **client** and **server**, using the Python `mcp` SDK.
 
-**MCP Client — Consume External Tool Servers (Phase 2):**
+**MCP Client — Consume External Tool Servers (Phase 3):**
 - Super agents can discover and call tools exposed by external MCP servers
-- Use cases: Home Assistant MCP server, n8n MCP bridge (if running externally), custom tool servers
+- Use cases: Home Assistant MCP server, **n8n workflow server** (expose n8n workflows as MCP tools — replaces running n8n on Pi, see DD-014), custom tool servers
+- n8n as MCP tool server: n8n runs externally (NAS, Docker host, cloud VM) and exposes its workflows via its built-in MCP server endpoint. Cortex discovers n8n workflows via `list_tools()` and registers them as action templates. Users build complex automations in n8n's visual editor; Cortex invokes them by voice. This gives Cortex the power of n8n without the 200-860MB RAM cost on Pi (similar to CAAL's approach but decoupled via MCP instead of tight integration).
 - Discovered tools are classified on registration:
   - Read-only tools → registered as cognitive tools (Tier 0-1)
   - State-changing tools → registered as action templates (Tier 2 by default, user can adjust)
@@ -831,6 +929,78 @@ servers:
     default_permission_tier: 1
     enabled: false
 ```
+
+**n8n MCP server configuration example:**
+```yaml
+# config/mcp_servers.yaml
+servers:
+  - name: n8n
+    url: "http://nas.local:5678/mcp"  # n8n running on NAS/Docker host
+    transport: streamable_http
+    timeout_seconds: 15  # workflows may take longer than simple tools
+    tool_prefix: n8n  # tools registered as n8n__<workflow_name>
+    default_permission_tier: 2  # n8n workflows are state-changing by default
+    enabled: true
+    # Optional: only expose specific workflows (whitelist)
+    # tool_filter: ["home_automation_*", "backup_*"]
+```
+
+#### 4.4.8.1 Unified Tool Discovery Lifecycle
+
+All three tool sources — **Python handlers**, **script-based tools** (DD-050), and **MCP servers** — share a unified discovery lifecycle managed by the ToolRegistry:
+
+**Discovery triggers:**
+
+| Trigger | When | What happens |
+|---|---|---|
+| **Startup** | `cortex-core.service` starts | Scan `tools/*/TOOL.yaml`, load Python tools, connect to all configured MCP servers, call `list_tools()` on each |
+| **Hot-reload signal** | `SIGHUP` to cortex-core, or web UI "Reload tools" button | Re-scan `tools/` directory for new/changed/removed TOOL.yaml files. Re-query MCP servers for updated tool lists. No service restart required. |
+| **MCP server reconnect** | MCP server comes online (was offline at startup), or connection recovered after failure | `list_tools()` called, new tools registered, stale tools marked unavailable |
+| **Web UI upload** | User uploads a TOOL.yaml folder via web UI (Phase 3) | Tool placed in `tools/`, validated, registered immediately |
+| **Tool pipeline deploy** | Tool passes through Specify → Develop → Review → Approve (Phase 4) | Newly approved tool registered in ToolRegistry |
+| **Config change** | `config/mcp_servers.yaml` modified | Affected MCP connections torn down and re-established |
+
+**Discovery flow:**
+```
+Trigger (startup / SIGHUP / upload / reconnect)
+    ↓
+┌─────────────────────────────────────────────────────────────┐
+│ ToolRegistry.discover()                                     │
+├─────────────────────────────────────────────────────────────┤
+│ 1. Scan tools/*/TOOL.yaml → parse, validate, register      │
+│ 2. Load Python handler tools → import, instantiate          │
+│ 3. For each MCP server in config:                           │
+│    a. Connect (or verify existing connection)               │
+│    b. Call list_tools() → get schemas                       │
+│    c. Classify: read-only → Tier 0-1, state-changing → 2   │
+│    d. Register with tool_prefix (e.g., n8n__backup_nas)     │
+│ 4. Merge all tools into unified registry                    │
+│ 5. Register trigger patterns with IntentRouter              │
+│ 6. Register keywords for pre-filtering                      │
+│ 7. Publish discovery event on ZeroMQ bus                    │
+│ 8. Log to audit: tools added/removed/updated                │
+└─────────────────────────────────────────────────────────────┘
+    ↓
+Tools available to agents via unified interface
+(agent doesn't know or care if tool is Python, script, or MCP)
+```
+
+**Key property:** Agents interact with all tools through the same `Tool` protocol interface. A tool backed by a Python class, a subprocess script, or an MCP remote call all look identical to the agent. The ToolRegistry handles the dispatch internally.
+
+**MCP tool routing:** MCP-discovered tools can also have `triggers` and `keywords` — these are specified in `config/mcp_servers.yaml` per-tool overrides or auto-generated from the MCP tool description:
+
+```yaml
+servers:
+  - name: n8n
+    url: "http://nas.local:5678/mcp"
+    tool_overrides:
+      backup_nas:
+        triggers: ['backup\s+(?:the\s+)?nas', 'run\s+(?:a\s+)?backup']
+        keywords: [backup, nas, storage]
+        permission_tier: 1  # override default tier 2
+```
+
+This means n8n workflows get the same zero-LLM routing as script-based tools — "backup the NAS" matches the regex trigger, Cortex calls the n8n workflow via MCP, no LLM call needed.
 
 #### 4.4.9 Context Assembly & Management
 
@@ -1834,6 +2004,8 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 - Settings
 - Notification center in web UI
 - WebSocket notification push + browser notifications (P2+)
+- Script-based tool loader — ToolRegistry discovers and loads TOOL.yaml folders (DD-050)
+- YAML workflow templates for MCP tool orchestration (multi-step sequences with validation scripts)
 - External services: read + write — CalDAV calendar, IMAP/SMTP email, ntfy messaging (DD-035)
 - A2A protocol: client discovery + server Agent Card (DD-036)
 - Document upload UI for knowledge store (DD-039)
@@ -1847,6 +2019,8 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 
 ### Phase 4 — Dynamic Capabilities (Weeks 13-16)
 - Tool development pipeline (specify → develop → review → approve → deploy)
+- User-created script-based tools via tool pipeline — LLM generates TOOL.yaml + scripts from natural language (DD-050)
+- Bubblewrap sandbox for Tier 2+ script tools (subprocess isolation with controlled I/O)
 - Agent factory (dynamic super agent creation)
 - Long-term memory with embeddings
 - Tool promotion system (Tier 2 → Tier 1 → Tier 0 after supervised use)
@@ -1857,6 +2031,7 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 
 > **Exit criteria:**
 > - New tool created via tool pipeline, approved, and callable by agent end-to-end
+> - Script-based tool (TOOL.yaml + scripts/) created, sandboxed, and executable via voice or web UI
 > - Knowledge store ingests a document and retrieves relevant passage in response to query
 > - Long-term memory correctly recalls facts from previous sessions via semantic search
 > - Proactive pattern detection identifies at least one routine from episodic data
@@ -2053,6 +2228,7 @@ data/
 | DD-047 | 2,047 token hard limit confirmed | 2026-03-02 | Phase 1 investigation: Qwen3-1.7B max sequence length is 2,047 tokens, hard-baked into compiled axmodel files. Tokenizer reports `model_max_length: 131072` (tokenizer capacity, not axmodel limit). C++ binary strings show `prefill_max_kv_cache_num_grp`, `prefill_max_token_num` as baked constants. FastVLM InferManager defaults to `max_seq_len=2047`. Qwen3 `config.json` is 0 bytes (no runtime override). Changing requires Pulsar2 recompile of all 28 layer axmodels. **Impact on context assembly:** ~1,200 tokens for system prompt + recent turns, ~800 tokens for generation. Rolling summary (DD-028) critical for coherence within this budget. |
 | DD-048 | NPU multiplexing confirmed (~0ms switch) | 2026-03-02 | Phase 1 investigation: co-resident models can be loaded and inferred concurrently via pyaxengine with negligible context-switch overhead. Tested 10 rounds alternating SenseVoice (avg 128.6ms) and Kokoro (avg 18.6ms) — switch overhead ~0ms. Confirms streaming voice pipeline (DD-031) is feasible: LLM generates sentence N+1 while TTS synthesizes sentence N. Sequential fallback mode no longer needed as primary path. |
 | DD-049 | Audio via sounddevice with ALSA default device | 2026-03-02 | Phase 1 investigation + hardware validation: Python `sounddevice` for capture and playback on WM8960. **Capture:** 16kHz mono via ALSA `default` device — routes through `/etc/asound.conf` plug→dsnoop chain that handles 2-channel WM8960 hardware. **CRITICAL: Do NOT use `hw:0,0` with channels=1** — WM8960 requires stereo capture, raw hw device with mono produces garbage audio. Confirmed by whisplay-ai-chatbot (same approach: `sox -t alsa default`). **Playback:** ALSA `default` device (dmix resamples 24kHz→48kHz for Kokoro TTS output). **Mixer tuning:** Capture=55/63, Boost=2(+20dB), ALC=OFF (compresses too aggressively), HPF=on, NoiseGate=on. DC offset removal in software (~300-600 ADC bias). **ASR verified:** SenseVoice transcribes speech accurately at these levels (0.17s inference on NPU). `scripts/setup-mixer.sh` configures all settings. |
+| DD-050 | Script-based tools (progressive disclosure) | 2026-03-03 | Inspired by Anthropic's Claude Skills architecture: tools can be defined as **self-contained folders** (`TOOL.yaml` + `scripts/` + optional `references/`) rather than requiring compiled Python classes. YAML defines schema (name, description, parameters, permission tier), optional `triggers` (regex patterns for zero-LLM routing via IntentRouter), and optional `keywords` (for pre-filtering when tool library exceeds token budget). Scripts provide deterministic execution. Three-level progressive disclosure for 2,047-token budget: (1) short description always in context (~30-50 tokens), (2) full instructions injected only when tool is selected (~100-200 tokens), (3) reference docs available but never in LLM context. Three routing paths: regex trigger match (0 tokens), keyword pre-filter + LLM (200-400 tokens), full LLM selection (400-800 tokens). Key insight: "code is deterministic; language interpretation isn't" — offloading validation and formatting to scripts saves tokens and improves reliability. Auto-discovery: ToolRegistry scans `tools/*/TOOL.yaml` at startup + hot-reload. Script tools restricted to Tier 0-1 until bubblewrap sandboxing (Phase 4). Complements MCP (connectivity) with workflow knowledge (how to orchestrate multi-step tool sequences). Phase 3: script tool loader in ToolRegistry + YAML workflow templates for MCP tool orchestration. Phase 4: user-created script tools via tool development pipeline. |
 
-*Document version: 0.1.18 — Phase 2 Agent Core complete: hybrid intent router, 4-tier permissions, audit log, 5 built-in tools, memory system, scheduling, notifications, health monitor. 487 tests passing, validated on Pi.*
+*Document version: 0.1.20 — Added DD-050: script-based tools with progressive disclosure. Added §4.4.8.1: unified tool discovery lifecycle (startup, hot-reload, MCP reconnect, web upload, pipeline deploy). Expanded MCP client with n8n workflow server pattern and tool routing overrides. Updated Action Engine §4.4.5, Tool Development Pipeline §4.4.7, Phase 3/4 deliverables.*
 *Status: DRAFT*
