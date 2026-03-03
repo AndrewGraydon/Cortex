@@ -34,8 +34,8 @@ amixer -c $CARD cset name='ADC High Pass Filter Switch' on > /dev/null
 
 # ALC (Automatic Level Control) — disabled
 # ALC compresses speech signal too aggressively on WM8960.
-# With Capture=50 + Boost=2 + default ALSA device, peak speech ~40-70% of max,
-# leaving good headroom without clipping.
+# With Capture=55 + Boost=2 + default ALSA device, peak speech ~60-70% of max.
+# Verified: SenseVoice ASR transcribes accurately at these levels.
 amixer -c $CARD cset name='ALC Function' 0 > /dev/null  # Off
 
 # Noise gate
