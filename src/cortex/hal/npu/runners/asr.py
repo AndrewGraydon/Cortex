@@ -103,6 +103,15 @@ class ASRRunner:
 
         max_seq_len = config.get("max_seq_len", 256)
 
+        # Detect available axengine provider
+        try:
+            import axengine as axe
+
+            providers = axe.get_available_providers()
+            logger.info("Available axengine providers: %s", providers)
+        except ImportError:
+            providers = ["AXCLRTExecutionProvider"]
+
         self._model = sensevoice_cls(
             model_path=str(axmodel_dir / "sensevoice.axmodel"),
             cmvn_file=str(axmodel_dir / "am.mvn"),
@@ -110,6 +119,7 @@ class ASRRunner:
             bpe_model=str(axmodel_dir / "chn_jpn_yue_eng_ko_spectok.bpe.model"),
             max_seq_len=max_seq_len,
             streaming=False,
+            providers=providers,
         )
 
     async def unload(self) -> None:
