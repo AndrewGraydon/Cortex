@@ -37,42 +37,69 @@ class ButtonStateMachine:
 
     Feed button state changes via on_press() and on_release().
     Retrieve events via get_event() or subscribe().
+
+    Thread-safety: on_press()/on_release() may be called from any thread
+    (e.g. RPi.GPIO callback thread). The event loop reference is captured
+    at construction time and coroutines are scheduled thread-safely.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        self._loop = loop
         self._press_time: float = 0.0
         self._release_times: list[float] = []
         self._is_pressed = False
         self._is_holding = False
         self._hold_fired = False
         self._event_queue: asyncio.Queue[ButtonEvent] = asyncio.Queue()
-        self._hold_task: asyncio.Task[None] | None = None
-        self._click_task: asyncio.Task[None] | None = None
+        self._hold_handle: Any = None  # Task or concurrent.futures.Future
+        self._click_handle: Any = None
+
+    def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Set the event loop for thread-safe scheduling."""
+        self._loop = loop
+
+    def _schedule(self, coro: Any) -> Any:
+        """Schedule a coroutine, detecting whether we're in the loop thread.
+
+        From the event loop thread: uses ensure_future (immediate scheduling).
+        From other threads (GPIO callback): uses run_coroutine_threadsafe.
+        Both return objects supporting .cancel() and .done().
+        """
+        try:
+            asyncio.get_running_loop()
+            # We're in an async context — ensure_future works
+            return asyncio.ensure_future(coro)
+        except RuntimeError:
+            # No running loop in this thread (e.g. GPIO callback)
+            if self._loop is None:
+                logger.error("No event loop for button state machine")
+                return None
+            return asyncio.run_coroutine_threadsafe(coro, self._loop)
 
     def on_press(self) -> None:
-        """Called when button is pressed (goes HIGH)."""
+        """Called when button is pressed (goes HIGH). Thread-safe."""
         now = time.monotonic()
         self._is_pressed = True
         self._press_time = now
         self._hold_fired = False
 
         # Cancel any pending click resolution
-        if self._click_task and not self._click_task.done():
-            self._click_task.cancel()
+        if self._click_handle and not self._click_handle.done():
+            self._click_handle.cancel()
 
         # Start hold detection timer
-        self._hold_task = asyncio.ensure_future(self._detect_hold(now))
+        self._hold_handle = self._schedule(self._detect_hold(now))
 
     def on_release(self) -> None:
-        """Called when button is released (goes LOW)."""
+        """Called when button is released (goes LOW). Thread-safe."""
         now = time.monotonic()
         self._is_pressed = False
         press_duration = now - self._press_time
 
         # Cancel hold detection
-        if self._hold_task and not self._hold_task.done():
-            self._hold_task.cancel()
-            self._hold_task = None
+        if self._hold_handle and not self._hold_handle.done():
+            self._hold_handle.cancel()
+            self._hold_handle = None
 
         if self._is_holding:
             # End of hold
@@ -93,7 +120,7 @@ class ButtonStateMachine:
         self._release_times.append(now)
 
         # Start/restart click resolution timer
-        self._click_task = asyncio.ensure_future(self._resolve_clicks())
+        self._click_handle = self._schedule(self._resolve_clicks())
 
     async def wait_gesture(self) -> ButtonEvent:
         """Wait for the next gesture event."""
@@ -155,11 +182,13 @@ class GpioButtonService:
     def __init__(self, pin: int = 11, bounce_ms: int = 20) -> None:
         self._pin = pin
         self._bounce_ms = bounce_ms
-        self._state_machine = ButtonStateMachine()
+        self._state_machine: ButtonStateMachine | None = None
         self._gpio: Any = None
 
     async def start(self) -> None:
         """Initialize GPIO and start edge detection."""
+        # Create state machine with current event loop for thread-safe GPIO callbacks
+        self._state_machine = ButtonStateMachine(loop=asyncio.get_running_loop())
         try:
             import RPi.GPIO as GPIO  # type: ignore[import-untyped]
         except ImportError as e:
@@ -185,14 +214,16 @@ class GpioButtonService:
             logger.info("Button service stopped")
 
     async def wait_gesture(self) -> ButtonEvent:
+        assert self._state_machine is not None, "Call start() first"
         return await self._state_machine.wait_gesture()
 
     def subscribe(self) -> AsyncIterator[ButtonEvent]:
+        assert self._state_machine is not None, "Call start() first"
         return self._state_machine.subscribe()
 
     def _gpio_callback(self, channel: int) -> None:
-        """GPIO edge callback — runs in GPIO thread."""
-        if self._gpio is None:
+        """GPIO edge callback — runs in RPi.GPIO background thread."""
+        if self._gpio is None or self._state_machine is None:
             return
         state = self._gpio.input(self._pin)
         if state:
