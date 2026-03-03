@@ -1,9 +1,9 @@
 #!/bin/bash
 # WM8960 ALSA mixer settings for Cortex voice capture on Whisplay HAT.
 #
-# Tuned for speech capture with the onboard MEMS mic:
-#   - Capture gain: moderate with +20dB boost
-#   - ALC (Automatic Level Control): prevents clipping on loud speech
+# Tuned for speech capture with the onboard MEMS mic via ALSA default device:
+#   - Capture gain: PGA=55/63, Boost=+20dB (headroom for loud speech)
+#   - ALC disabled (compresses too aggressively on WM8960)
 #   - High Pass Filter: removes DC offset and low-freq rumble
 #   - Noise Gate: reduces background noise between utterances
 #
@@ -17,8 +17,9 @@ CARD=0
 echo "Configuring WM8960 mixer on card $CARD for voice capture..."
 
 # --- Capture path ---
-# PGA gain: 63/63 (max, ~+29.75dB)
-amixer -c $CARD cset name='Capture Volume' 63,63 > /dev/null
+# PGA gain: 55/63 (~+22.6dB, reduced from max to avoid clipping with default device)
+# With the ALSA default device (plug→dsnoop), signal is ~5x stronger than raw hw:0,0.
+amixer -c $CARD cset name='Capture Volume' 55,55 > /dev/null
 amixer -c $CARD cset name='Capture Switch' on,on > /dev/null
 
 # Input boost: 2 = +20dB via LINPUT1
@@ -33,8 +34,8 @@ amixer -c $CARD cset name='ADC High Pass Filter Switch' on > /dev/null
 
 # ALC (Automatic Level Control) — disabled
 # ALC compresses speech signal too aggressively on WM8960.
-# With Capture=63 + Boost=2, peak speech reaches ~7000/32767 (~22%)
-# which is ideal for 16-bit ADC headroom without clipping.
+# With Capture=50 + Boost=2 + default ALSA device, peak speech ~40-70% of max,
+# leaving good headroom without clipping.
 amixer -c $CARD cset name='ALC Function' 0 > /dev/null  # Off
 
 # Noise gate
