@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-03-02 (Session 14)
+# Last updated: 2026-03-02 (Session 15)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -111,7 +111,7 @@ Seven-layer stack:
 
 ## Implementation Phases
 - **Phase 0** — Hardware foundation (COMPLETE)
-- **Phase 1** — Voice loop (CURRENT — Milestones 1.1, 1.2, 2.1 complete)
+- **Phase 1** — Voice loop (COMPLETE — all milestones 1.1-4.4, 121 tests passing)
 - **Phase 2** — Agent core (tools, permissions, audit, sandbox)
 - **Phase 3** — Web UI
 - **Phase 4** — Dynamic capabilities (tool pipeline, agent factory, long-term memory)
@@ -185,28 +185,61 @@ Seven-layer stack:
 ## File Structure
 ```
 Cortex/
-├── docs/design/         # Scope and architecture docs
-├── docs/guides/         # Setup and operational guides
-├── context/             # This file and other context docs
-├── src/cortex/          # Application source
-│   ├── config.py        # Pydantic config loading cortex.yaml
-│   ├── cli.py           # Click CLI entry point
-│   ├── hal/             # Hardware Abstraction Layer
-│   │   ├── protocols.py # NpuService, AudioService, DisplayService, ButtonService
-│   │   ├── types.py     # ModelHandle, InferenceIO, AudioData, DisplayState, etc.
-│   │   └── npu/mock.py  # MockNpuService (realistic timing, error injection)
-│   ├── voice/types.py   # VoiceState, ASRResult, LLMChunk, TTSChunk, LatencyMetrics
-│   └── ipc/             # ZeroMQ message bus
-│       ├── messages.py  # CortexMessage (JSON + ZMQ multipart)
-│       └── bus.py       # MessageBus (pub/sub)
-├── tests/               # Test suites (68 passing)
-│   ├── unit/            # Off-Pi tests
-│   └── hardware/        # Pi-only tests (pytest -m hardware)
-├── config/              # Config files
-├── scripts/             # Utility scripts (dev-setup.sh)
-├── Makefile             # dev, lint, format, test, test-hw
-├── models/              # Local model storage (gitignored)
-└── data/                # Runtime data (gitignored)
+├── docs/design/             # Scope and architecture docs
+├── docs/guides/             # Setup and operational guides
+├── context/                 # This file and other context docs
+├── src/cortex/              # Application source (51 source files)
+│   ├── config.py            # Pydantic config loading cortex.yaml
+│   ├── cli.py               # Click CLI (cortex run/config/version)
+│   ├── core/                # Main service orchestrator
+│   │   └── service.py       # CortexService + run_cortex()
+│   ├── hal/                 # Hardware Abstraction Layer
+│   │   ├── protocols.py     # NpuService, AudioService, DisplayService, ButtonService
+│   │   ├── types.py         # ModelHandle, InferenceIO, AudioData, DisplayState, etc.
+│   │   ├── npu/             # NPU service (mock + real)
+│   │   │   ├── mock.py      # MockNpuService (realistic timing, error injection)
+│   │   │   ├── axcl.py      # AxclNpuService (Pi NPU, mixed invocation)
+│   │   │   ├── main.py      # cortex-npu systemd entry point
+│   │   │   └── runners/     # Per-model-type runners (llm, asr, tts, vlm)
+│   │   ├── audio/           # Audio service (mock + ALSA)
+│   │   │   ├── mock.py      # MockAudioService
+│   │   │   ├── service.py   # AlsaAudioService (sounddevice)
+│   │   │   └── main.py      # cortex-audio systemd entry point
+│   │   └── display/         # Display, button, LED service
+│   │       ├── mock.py      # MockDisplayService + MockButtonService
+│   │       ├── service.py   # WhisplayDisplayService (ST7789 LCD)
+│   │       ├── button.py    # ButtonStateMachine + GpioButtonService
+│   │       ├── led.py       # GpioLedController (PWM)
+│   │       └── main.py      # cortex-display systemd entry point
+│   ├── voice/               # Voice pipeline
+│   │   ├── types.py         # VoiceSession, ASRResult, LatencyMetrics, etc.
+│   │   ├── pipeline.py      # VoicePipeline (button→ASR→LLM→TTS→speaker)
+│   │   ├── sentence_detector.py # Streaming sentence boundary detection
+│   │   └── metrics.py       # Latency metrics logging
+│   ├── ipc/                 # ZeroMQ message bus
+│   │   ├── messages.py      # CortexMessage (JSON + ZMQ multipart)
+│   │   └── bus.py           # MessageBus (pub/sub)
+│   └── utils/               # Shared utilities
+│       └── logging.py       # Centralized structlog configuration
+├── tests/                   # Test suites (121 passing)
+│   ├── unit/                # Off-Pi tests (121 tests)
+│   └── hardware/            # Pi-only tests (7 tests, pytest -m hardware)
+├── config/                  # Config files
+│   ├── cortex.yaml.template # Config template
+│   ├── prompts/             # System prompts
+│   │   └── system_v1.txt    # Default voice assistant prompt
+│   └── systemd/             # Service unit files
+│       ├── cortex-core.service
+│       ├── cortex-npu.service
+│       ├── cortex-audio.service
+│       ├── cortex-display.service
+│       └── cortex.target
+├── scripts/                 # Utility scripts
+│   ├── dev-setup.sh
+│   └── install-services.sh
+├── Makefile                 # dev, lint, format, test, test-hw
+├── models/                  # Local model storage (gitignored)
+└── data/                    # Runtime data (gitignored)
 ```
 
 ## Conversation History Summary
@@ -230,14 +263,14 @@ Cortex/
 
 - **Session 14 (2026-03-02):** Completed all four Pi hardware investigations (0A-0D). **Investigation 0A (NPU invocation):** Mixed architecture confirmed — LLM (Qwen3) uses C++ binary `main_axcl_aarch64` with separate tokenizer HTTP server on port 12345; ASR (SenseVoice) uses pyaxengine `InferenceSession` directly (single axmodel); TTS (Kokoro) uses pyaxengine (3 axmodel + 1 ONNX CPU vocoder); VLM (FastVLM) uses pyaxengine via `InferManager` (pure-Python autoregressive inference with per-layer axmodels and numpy KV caches — proves LLM via pyaxengine is possible as future optimization). DD-046. **Investigation 0B (token limit):** 2,047 tokens confirmed as hard limit baked into compiled axmodel. Tokenizer says 131,072 (tokenizer capacity, not axmodel). config.json is 0 bytes. FastVLM InferManager defaults max_seq_len=2047. Requires Pulsar2 recompile to change. Context assembly budget: ~1,200 tokens input, ~800 tokens generation. DD-047. **Investigation 0C (multiplexing):** NPU multiplexing confirmed working with ~0ms switch overhead. 10 rounds alternating SenseVoice (avg 128.6ms) and Kokoro (avg 18.6ms) — negligible context-switch time. Full streaming pipeline (DD-031) confirmed feasible. DD-048. **Investigation 0D (audio):** sounddevice works for both capture (16kHz on hw:0,0) and playback. WM8960 hardware doesn't support 24kHz natively (supported: 8k/16k/22.05k/32k/44.1k/48k). Solution: ALSA `default` device for playback handles 24kHz via dmix resampler. DD-049. Updated scope doc to v0.1.16 with DD-046 through DD-049. Updated streaming pipeline section with confirmed multiplexing results.
 
+- **Session 15 (2026-03-02):** Phase 1 completed — all remaining milestones (4.1-4.4) built, tested, and verified. **Milestone 4.1 (Core Service):** CortexService orchestrator (HAL init, model pre-loading, pipeline lifecycle), `run_cortex()` entry point with signal handling, CLI wired with `--mock/--no-mock`. **Milestone 4.2 (Display Integration):** Already wired — pipeline sets display states at every phase (LISTENING→THINKING→SPEAKING→IDLE), LED colors coordinated via STATE_LED_MAP, error state shown on exceptions. **Milestone 4.3 (Error Handling):** LLM retry (1 retry then apologize), TTS fallback (show text on LCD if synthesis fails), pipeline always returns to IDLE via try/finally, ASR error triggers generic error display. Centralized structlog config in `cortex.utils.logging`. All service entry points updated. Error recovery tests (empty ASR, LLM retry, TTS fallback, generic error) and interruption tests (long press, hold start, session lifecycle). **Milestone 4.4 (Exit Criteria):** All 6 verified PASS: (1) E2E voice pipeline fully wired, (2) TTFA metrics tracked with computed properties, (3) 4 systemd units + cortex.target + install script, (4) display states for every pipeline phase, (5) 121 tests passing with MockNpuService, (6) LatencyMetrics logged for every interaction. **121 tests passing, mypy strict clean, ruff clean.**
+
 ### NEXT SESSION — Resume Here
-**Topic:** Phase 1 continues — HAL services and voice pipeline.
-- **Milestone 2.2:** AxclNpuService (real NPU inference — subprocess for LLM, pyaxengine for ASR/TTS/VLM per DD-046)
-- **Milestone 2.3:** AudioService (sounddevice, capture 16kHz hw:0,0, playback 24kHz via ALSA default per DD-049)
-- **Milestone 2.4:** DisplayService + ButtonService (LCD states, gesture state machine, LED PWM)
-- **Milestone 2.5:** ZeroMQ IPC + systemd units
-- **Milestones 3.1-3.4:** Voice pipeline (ASR → LLM → TTS → streaming)
-- **Milestones 4.1-4.4:** Integration, error handling, exit criteria verification
+**Topic:** Phase 1 is complete. Phase 2 begins — Agent Core.
+- Phase 2 scope: tools, permissions, audit, sandbox, model provider layer
+- First milestone: define agent framework interfaces and orchestrator
+- MockNpuService enables all development on dev machine
+- On Pi: test E2E voice loop with real hardware (first real conversation)
 
 ---
 
