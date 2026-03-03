@@ -209,34 +209,42 @@ sudo python3 display_test.py  # or equivalent from run_test.sh
 ### Button Input
 ```bash
 python3 -c "
-import gpiod, time
-chip = gpiod.Chip('gpiochip4')
-line = chip.get_line(11)
-line.request(consumer='test', type=gpiod.LINE_REQ_DIR_IN)
+import RPi.GPIO as GPIO
+import time
+GPIO.setmode(GPIO.BOARD)
+GPIO.setup(11, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 print('Press the button (Ctrl+C to exit)...')
-while True:
-    if line.get_value() == 0:  # Active low
-        print('Button PRESSED')
-    time.sleep(0.05)
+try:
+    while True:
+        if GPIO.input(11):  # Active HIGH (pressed=1)
+            print('Button PRESSED')
+        time.sleep(0.05)
+except KeyboardInterrupt:
+    GPIO.cleanup()
 "
 # Verify: "Button PRESSED" appears on each press
+# NOTE: Button is active-HIGH (pressed=1), uses RPi.GPIO BOARD pin numbering
 ```
 
 ### RGB LEDs
 ```bash
 python3 -c "
-import gpiod, time
-chip = gpiod.Chip('gpiochip4')
+import RPi.GPIO as GPIO
+import time
+GPIO.setmode(GPIO.BOARD)
+# LEDs are active-LOW (0=on, 100=off via PWM)
 for pin, color in [(22, 'RED'), (18, 'GREEN'), (16, 'BLUE')]:
-    line = chip.get_line(pin)
-    line.request(consumer='test', type=gpiod.LINE_REQ_DIR_OUT)
-    line.set_value(1)
+    GPIO.setup(pin, GPIO.OUT)
+    pwm = GPIO.PWM(pin, 1000)
+    pwm.start(0)  # 0% duty = full brightness (active-low)
     print(f'{color} on')
     time.sleep(1)
-    line.set_value(0)
+    pwm.stop()
+GPIO.cleanup()
 print('LED test complete')
 "
 # Verify: LEDs cycle red → green → blue
+# NOTE: LEDs are active-LOW via PWM on pins 22/18/16 (BOARD numbering)
 ```
 
 ---
@@ -267,8 +275,11 @@ git clone https://huggingface.co/M5Stack/SenseVoiceSmall-axmodel --depth 1
 
 ### Test 3: Mic → ASR Pipeline
 ```bash
-arecord -D plughw:<CARD>,0 -f S16_LE -r 16000 -c 1 -d 5 test_mic.wav
+# IMPORTANT: Use ALSA 'default' device, NOT hw:0,0. WM8960 requires 2-channel
+# capture. The /etc/asound.conf routes 'default' through plug→dsnoop chain.
+arecord -D default -f S16_LE -r 16000 -c 1 -d 5 test_mic.wav
 # Feed to SenseVoice, verify end-to-end
+# Verified Session 16: "This is a test." transcribed in 0.17s
 ```
 
 ### Test 4: Multi-Model Memory Budget (CRITICAL)
@@ -397,7 +408,7 @@ HARDWARE VALIDATION
 [x] LCD displays test pattern (240x280 ST7789, SPI0, color cycling verified)
 [x] Button press detected on pin 11 (BOARD numbering, active-HIGH via RPi.GPIO)
 [x] RGB LEDs cycle through red/green/blue (PWM via pins 22/18/16 BOARD)
-[x] Microphone captures audio (arecord 16kHz stereo via hw:wm8960soundcard)
+[x] Microphone captures audio (arecord 16kHz mono via ALSA 'default' device — see DD-049)
 [ ] PiSugar reports battery and charging state — NOT CONNECTED (pogo pins not in contact)
 [ ] CSI camera captures image — SKIPPED (no camera attached)
 [x] I2C stable under NPU load (0x1a=WM8960 UU, 0x40=Whisplay component)
@@ -575,6 +586,10 @@ python3 infer_axmodel_650.py \
 | `lspci` empty | Reseat FPC cable, enable PCIe in raspi-config |
 | I2C all `UU` | Disable PiSugar AUTO switch |
 | No sound | Specify WM8960 card number explicitly |
+| Noisy/garbled mic audio | Use ALSA `default` device, NOT `hw:0,0`. WM8960 requires 2-channel capture — the `default` device routes through plug→dsnoop chain (DD-049) |
+| Mic audio clipping | Reduce Capture Volume (try 50-55/63). Run `scripts/setup-mixer.sh` for tested defaults |
+| `arecord -c 1` fails on hw:0,0 | Expected — WM8960 hw requires stereo. Use `-D default` instead |
+| Button GPIO "no event loop in thread" | RPi.GPIO callbacks run on background thread. Use `asyncio.run_coroutine_threadsafe()` |
 | Under-voltage | Use mains power; battery for light tasks |
 | NPU > 75°C | Check fan, add ventilation |
 | `axcl-smi` not found | `source ~/.bashrc` or re-login |
