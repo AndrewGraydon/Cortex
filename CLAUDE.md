@@ -12,9 +12,10 @@ Privacy-first, local-first, with optional secure external access.
 - **Config template:** `config/cortex.yaml.template`
 
 ## Current Phase
-**Phase 1 — Voice Loop — COMPLETE.** All milestones done, 121 unit tests passing.
-Hardware validated on Pi: button gestures, LED control, audio capture, ASR transcription.
-Next: Phase 2 — Agent Core (tools, permissions, audit, sandbox).
+**Phase 2 — Agent Core — COMPLETE.** All milestones done, 487 unit + integration tests passing.
+Hybrid intent router, 4-tier permissions, audit log, tool calling, memory, scheduling, notifications, health monitor.
+Validated on Pi (497 pass including hardware tests, 7 expected HW failures).
+Next: Phase 3 — Web UI (FastAPI + HTMX/Svelte, auth, external services, A2A).
 
 ## Architecture
 Seven-layer stack (HAL → Voice → Reasoning → Agent → Security → Web UI → Display UI).
@@ -46,14 +47,14 @@ LCD display adapted from PiSugar whisplay-ai-chatbot (Pillow + cairosvg + SPI).
 ## Code Style
 - Linter: ruff (target Python 3.11, 100-char line length)
 - Type checking: mypy (strict mode)
-- Tests: pytest with pytest-asyncio (121 tests passing)
+- Tests: pytest with pytest-asyncio (487 tests passing)
 - Logging: structlog (structured JSON)
 - All HAL interfaces via Protocol classes in `hal/protocols.py`
 
 ## Conventions
 - Update `context/project-context.md` when making significant design decisions
 - Design decisions use IDs: DD-NNN with date and rationale
-- Scope doc version bumps on changes (currently v0.1.17)
+- Scope doc version bumps on changes (currently v0.1.18)
 - Hardware metrics go in `docs/guides/phase-0-hardware-setup.md` completion checklist
 - Models stored in `models/` (gitignored), runtime data in `data/` (gitignored)
 - No secrets in config files — use `.env` (gitignored)

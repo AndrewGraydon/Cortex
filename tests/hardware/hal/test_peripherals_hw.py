@@ -10,6 +10,8 @@ Others require user interaction (button press, audio verification).
 from __future__ import annotations
 
 import asyncio
+import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -227,4 +229,121 @@ class TestDisplayServiceHardware:
         finally:
             await led.set_color(LedColor.off())
             await display.stop()
+            await led.stop()
+
+
+class TestCombinedPipelineHardware:
+    """Test 5: Combined button → LED → record → ASR pipeline.
+
+    End-to-end test that exercises all Whisplay HAT peripherals together:
+    LED signals the user, button controls recording, mic captures speech,
+    and SenseVoice ASR transcribes it on the NPU.
+
+    REQUIRES USER: Press and hold button, speak, then release.
+    REQUIRES: SenseVoice model at ~/models/SenseVoice
+    """
+
+    async def test_button_record_asr_pipeline(self) -> None:
+        """Hold button → record speech → ASR transcription → playback.
+
+        Pipeline stages with LED color feedback:
+          1. Dim blue (idle) — waiting for button hold
+          2. Green (listening) — recording while button held
+          3. Amber (thinking) — running ASR inference
+          4. Blue (result) — showing transcription, playing back audio
+        """
+        from cortex.hal.audio.service import AlsaAudioService
+        from cortex.hal.display.button import GpioButtonService
+        from cortex.hal.display.led import GpioLedController
+        from cortex.hal.npu.runners.asr import ASRRunner
+        from cortex.hal.types import AudioData, AudioFormat, ButtonGesture, LedColor
+
+        model_path = Path.home() / "models" / "SenseVoice"
+        if not model_path.exists():
+            pytest.skip(f"SenseVoice model not found at {model_path}")
+
+        led = GpioLedController()
+        button = GpioButtonService(pin=11)
+        audio = AlsaAudioService()
+        asr = ASRRunner()
+
+        await led.start()
+        await button.start()
+
+        try:
+            # Load ASR model
+            await asr.load(model_path, {})
+
+            # Stage 1: Idle — dim blue
+            await led.set_color(LedColor.idle())
+            print("\n  DIM BLUE = Idle. Press and HOLD the button, speak, then release.")
+            print("  Waiting for button hold... (15s timeout)")
+
+            # Wait for hold_start gesture
+            event = await asyncio.wait_for(button.wait_gesture(), timeout=15.0)
+            assert event.gesture == ButtonGesture.HOLD_START, (
+                f"Expected hold_start, got {event.gesture.value}"
+            )
+
+            # Stage 2: Listening — green
+            await led.set_color(LedColor.listening())
+            print("  GREEN = RECORDING! Speak now, release when done.")
+            await audio.start_capture(sample_rate=16000)
+
+            # Wait for hold_end or long_press (release)
+            release = await asyncio.wait_for(button.wait_gesture(), timeout=15.0)
+            assert release.gesture in (ButtonGesture.HOLD_END, ButtonGesture.LONG_PRESS), (
+                f"Expected hold_end/long_press, got {release.gesture.value}"
+            )
+            print(f"  Released ({release.gesture.value}, {release.duration_ms:.0f}ms)")
+
+            captured = await audio.stop_capture()
+            duration = len(captured.samples) / captured.sample_rate
+            peak = int(np.max(np.abs(captured.samples))) if len(captured.samples) > 0 else 0
+            print(f"  Captured: {duration:.2f}s, peak={peak}/32767 ({peak / 327.67:.1f}%)")
+
+            assert len(captured.samples) > 0, "No audio captured"
+            assert duration >= 0.5, f"Recording too short: {duration:.2f}s"
+            assert peak > 100, f"No audio signal detected (peak={peak})"
+
+            # Stage 3: Thinking — amber
+            await led.set_color(LedColor.thinking())
+            print("  AMBER = Transcribing...")
+
+            from cortex.hal.types import InferenceInputs
+
+            t0 = time.monotonic()
+            result = await asr.infer(
+                InferenceInputs(
+                    data=captured.samples,
+                    params={"language": "auto", "sample_rate": 16000},
+                )
+            )
+            asr_time = time.monotonic() - t0
+
+            text = str(result.data).strip()
+            print(f"  === TRANSCRIPTION ({asr_time:.2f}s) ===")
+            print(f'    "{text}"')
+            print("  ===================================")
+
+            assert len(text) > 0, "ASR returned empty transcription"
+
+            # Stage 4: Result — blue, play back captured audio
+            await led.set_color(LedColor.speaking())
+            print("  BLUE = Result shown. Playing back audio...")
+
+            await audio.play(
+                AudioData(
+                    samples=captured.samples,
+                    sample_rate=captured.sample_rate,
+                    format=AudioFormat.S16_LE,
+                )
+            )
+
+            print("  SUCCESS: Combined pipeline test complete!")
+
+        finally:
+            await asr.unload()
+            await led.set_color(LedColor.off())
+            await button.stop()
             await led.stop()

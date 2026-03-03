@@ -7,6 +7,7 @@ Run this script on the Pi to verify each peripheral works correctly:
   3. Audio capture — records from microphone (speak into mic)
   4. Audio playback — plays a tone (listen for it)
   5. Combined test — button hold → record → playback
+  6. ASR pipeline — button hold → record → NPU transcription → playback
 
 Usage:
     python scripts/verify-hardware.py           # Run all tests
@@ -14,6 +15,7 @@ Usage:
     python scripts/verify-hardware.py button     # Button test only
     python scripts/verify-hardware.py audio      # Audio capture + playback
     python scripts/verify-hardware.py combined   # Full button → mic → speaker loop
+    python scripts/verify-hardware.py asr        # Button → record → ASR → playback
 
 Requires: RPi.GPIO, sounddevice, numpy (run from Cortex venv on Pi)
 """
@@ -24,6 +26,7 @@ import argparse
 import asyncio
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -130,10 +133,18 @@ async def test_button() -> bool:
     gestures_detected: dict[str, bool] = {}
 
     tests = [
-        ("HOLD", "Press and HOLD the button for about 1 second, then release.", {ButtonGesture.HOLD_START, ButtonGesture.HOLD_END}),
+        (
+            "HOLD",
+            "Press and HOLD the button for about 1 second, then release.",
+            {ButtonGesture.HOLD_START, ButtonGesture.HOLD_END},
+        ),
         ("SINGLE CLICK", "Give the button a quick single tap.", {ButtonGesture.SINGLE_CLICK}),
         ("DOUBLE CLICK", "Double-tap the button quickly.", {ButtonGesture.DOUBLE_CLICK}),
-        ("LONG PRESS", "Press and hold the button for 3+ seconds, then release.", {ButtonGesture.LONG_PRESS}),
+        (
+            "LONG PRESS",
+            "Press and hold the button for 3+ seconds, then release.",
+            {ButtonGesture.LONG_PRESS},
+        ),
     ]
 
     try:
@@ -157,7 +168,7 @@ async def test_button() -> bool:
                     # Check if we got what we need
                     if expected_gestures.issubset(detected):
                         break
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
 
             if expected_gestures.issubset(detected):
@@ -359,7 +370,7 @@ async def test_combined() -> bool:
                     print_info("Speak now! Release when done.")
                     await audio.start_capture(sample_rate=16000)
                     break
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
         if not hold_started:
@@ -373,9 +384,11 @@ async def test_combined() -> bool:
                 event = await asyncio.wait_for(button.wait_gesture(), timeout=0.5)
                 if event.gesture in (ButtonGesture.HOLD_END, ButtonGesture.LONG_PRESS):
                     hold_ended = True
-                    print_info(f"Release detected ({event.gesture.value}, {event.duration_ms:.0f}ms)")
+                    gesture = event.gesture.value
+                    ms = event.duration_ms
+                    print_info(f"Release detected ({gesture}, {ms:.0f}ms)")
                     break
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
         if not hold_ended:
@@ -427,6 +440,177 @@ async def test_combined() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Test 5: Combined button → LED → record → ASR → playback
+# ---------------------------------------------------------------------------
+async def test_asr() -> bool:
+    print_header("Test 5: ASR Pipeline (Button → LED → Record → Transcribe → Playback)")
+    print_info("This tests the full voice input pipeline with NPU transcription:")
+    print_info("  1. Press and hold button → LED turns green (listening)")
+    print_info("  2. Speak while holding → audio captured")
+    print_info("  3. Release button → LED turns amber (transcribing on NPU)")
+    print_info("  4. SenseVoice ASR produces transcription")
+    print_info("  5. LED turns blue (result) → playback your audio")
+    print_info("  6. LED returns to dim blue (idle)")
+    print()
+
+    model_path = Path.home() / "models" / "SenseVoice"
+    if not model_path.exists():
+        print_fail(f"SenseVoice model not found at {model_path}")
+        print_info("Download the model first. See docs/guides/phase-0-hardware-setup.md")
+        return False
+
+    try:
+        from cortex.hal.audio.service import AlsaAudioService
+        from cortex.hal.display.button import GpioButtonService
+        from cortex.hal.display.led import GpioLedController
+        from cortex.hal.npu.runners.asr import ASRRunner
+        from cortex.hal.types import (
+            AudioData,
+            AudioFormat,
+            ButtonGesture,
+            InferenceInputs,
+            LedColor,
+        )
+    except ImportError as e:
+        print_fail(f"Import failed: {e}")
+        return False
+
+    led = GpioLedController()
+    button = GpioButtonService(pin=11)
+    audio = AlsaAudioService()
+    asr = ASRRunner()
+
+    try:
+        await led.start()
+        await button.start()
+
+        # Load ASR model
+        print_info("Loading SenseVoice ASR model (may take a few seconds)...")
+        t0 = time.monotonic()
+        await asr.load(model_path, {})
+        load_time = time.monotonic() - t0
+        print_pass(f"ASR model loaded in {load_time:.1f}s")
+
+        # Stage 1: Idle
+        await led.set_color(LedColor.idle())
+        print()
+        print_wait("LED is dim blue (idle). Press and HOLD the button, speak, then release.")
+        print_wait("Waiting for button hold... (15s timeout)")
+
+        # Wait for hold start
+        deadline = time.monotonic() + 15.0
+        hold_started = False
+
+        while time.monotonic() < deadline:
+            try:
+                event = await asyncio.wait_for(button.wait_gesture(), timeout=0.5)
+                if event.gesture == ButtonGesture.HOLD_START:
+                    hold_started = True
+                    break
+            except TimeoutError:
+                continue
+
+        if not hold_started:
+            print_fail("No hold detected within timeout")
+            return False
+
+        # Stage 2: Listening
+        await led.set_color(LedColor.listening())
+        print_info("Hold detected → LED green (listening)")
+        print_info("Speak now! Release when done.")
+        await audio.start_capture(sample_rate=16000)
+
+        # Wait for hold end
+        hold_ended = False
+        while time.monotonic() < deadline:
+            try:
+                event = await asyncio.wait_for(button.wait_gesture(), timeout=0.5)
+                if event.gesture in (ButtonGesture.HOLD_END, ButtonGesture.LONG_PRESS):
+                    hold_ended = True
+                    gesture = event.gesture.value
+                    ms = event.duration_ms
+                    print_info(f"Release detected ({gesture}, {ms:.0f}ms)")
+                    break
+            except TimeoutError:
+                continue
+
+        if not hold_ended:
+            print_fail("No release detected within timeout")
+            if audio.is_capturing:
+                await audio.stop_capture()
+            return False
+
+        # Stop capture
+        captured = await audio.stop_capture()
+        duration = len(captured.samples) / captured.sample_rate
+        peak = int(np.max(np.abs(captured.samples))) if len(captured.samples) > 0 else 0
+        pct = peak / 327.67
+        print_info(f"Captured {duration:.2f}s of audio (peak={peak}/32767, {pct:.1f}%)")
+
+        if peak < 100:
+            print_fail(f"No audio signal detected (peak={peak})")
+            return False
+
+        # Stage 3: Thinking — ASR inference
+        await led.set_color(LedColor.thinking())
+        print_info("LED amber (thinking) → running ASR inference on NPU...")
+
+        t0 = time.monotonic()
+        result = await asr.infer(InferenceInputs(
+            data=captured.samples,
+            params={"language": "auto", "sample_rate": 16000},
+        ))
+        asr_time = time.monotonic() - t0
+
+        text = str(result.data).strip()
+        print()
+        print(f"  {'=' * 50}")
+        print(f"  TRANSCRIPTION ({asr_time:.2f}s): \"{text}\"")
+        print(f"  {'=' * 50}")
+        print()
+
+        if not text:
+            print_fail("ASR returned empty transcription")
+            return False
+
+        print_pass(f"ASR transcription successful in {asr_time:.2f}s")
+
+        # Stage 4: Playback
+        await led.set_color(LedColor.speaking())
+        print_info("LED blue (speaking) → playing back your audio...")
+
+        await audio.play(AudioData(
+            samples=captured.samples,
+            sample_rate=captured.sample_rate,
+            format=AudioFormat.S16_LE,
+        ))
+
+        # Return to idle
+        await led.set_color(LedColor.idle())
+        print_info("LED dim blue (idle)")
+
+        print()
+        result_input = input("  Did the ASR pipeline work correctly? (y/n): ").strip().lower()
+        if result_input == "y":
+            print_pass("ASR pipeline test passed!")
+            return True
+        else:
+            print_fail("ASR pipeline issues reported by user")
+            return False
+
+    except Exception as e:
+        print_fail(f"ASR pipeline error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        await asr.unload()
+        await led.set_color(LedColor.off())
+        await led.stop()
+        await button.stop()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 async def main(tests: list[str]) -> int:
@@ -442,10 +626,11 @@ async def main(tests: list[str]) -> int:
         "button": ("Button", test_button),
         "audio": ("Audio", test_audio),
         "combined": ("Combined", test_combined),
+        "asr": ("ASR Pipeline", test_asr),
     }
 
     if not tests:
-        tests = ["led", "button", "audio", "combined"]
+        tests = ["led", "button", "audio", "combined", "asr"]
 
     for test_name in tests:
         if test_name in test_map:
@@ -466,7 +651,6 @@ async def main(tests: list[str]) -> int:
     print_header("Verification Summary")
     all_pass = True
     for label, passed in results.items():
-        status = "PASS" if passed else "FAIL"
         marker = "[PASS]" if passed else "[FAIL]"
         print(f"  {marker} {label}")
         if not passed:
@@ -490,7 +674,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "tests",
         nargs="*",
-        choices=["led", "button", "audio", "combined"],
+        choices=["led", "button", "audio", "combined", "asr"],
         default=[],
         help="Specific tests to run (default: all)",
     )

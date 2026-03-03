@@ -1,5 +1,5 @@
 # Project Cortex — Agentic Local LLM Voice Assistant
-## System Design Scope Document v0.1.16
+## System Design Scope Document v0.1.18
 
 ---
 
@@ -1773,7 +1773,7 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 > - All 4 investigations documented with findings and decision — **DONE** (speculative decoding: not supported, constrained gen: stop tokens only, Moonshine: not needed, unified multimodal: not needed)
 > - Phase 0 completion checklist committed to repo — **PENDING** (this commit)
 
-### Phase 1 — Voice Loop (Weeks 3-5)
+### Phase 1 — Voice Loop (Weeks 3-5) — COMPLETE
 - Project scaffolding — `pyproject.toml`, `src/cortex/` package structure, ruff + mypy + pytest config, pre-commit hooks
 - Development environment — virtualenv setup, `MockNpuService` for off-Pi testing (DD-041), `scripts/dev-setup.sh`
 - Service architecture — systemd units, ZeroMQ IPC, data directory setup (DD-043)
@@ -1792,14 +1792,14 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 - Installation scripts (`scripts/install-services.sh`) and initial data directory layout (DD-044)
 
 > **Exit criteria:**
-> - End-to-end voice conversation works: button press → ASR → LLM → TTS → speaker
-> - TTFA < 8 seconds (relaxed initial target; optimize in later phases)
-> - All HAL services running as systemd units with ZeroMQ IPC
-> - LCD shows correct display mode for each pipeline state (idle, listening, thinking, speaking)
-> - `pytest` passes with `MockNpuService` on development machine (no Pi required)
-> - Latency metrics logged for every voice interaction
+> - End-to-end voice conversation works: button press → ASR → LLM → TTS → speaker — **DONE** (Session 15-16)
+> - TTFA < 8 seconds (relaxed initial target; optimize in later phases) — **DONE**
+> - All HAL services running as systemd units with ZeroMQ IPC — **DONE**
+> - LCD shows correct display mode for each pipeline state (idle, listening, thinking, speaking) — **DONE**
+> - `pytest` passes with `MockNpuService` on development machine (no Pi required) — **DONE** (121 tests)
+> - Latency metrics logged for every voice interaction — **DONE**
 
-### Phase 2 — Agent Core (Weeks 6-9)
+### Phase 2 — Agent Core (Weeks 6-9) — COMPLETE
 - Tool calling (Hermes templates)
 - Built-in tool set + utility cognitive tools (clock, calculator, unit_convert, dictionary_lookup)
 - Permission engine (4-tier)
@@ -1815,12 +1815,14 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 - Power profile auto-switching based on PiSugar charging state (DD-040)
 
 > **Exit criteria:**
-> - At least 3 built-in tools callable via voice with correct Hermes template parsing
-> - Tier 2 action triggers approval prompt on LCD; single-click approves, long-press denies
-> - Conversation memory persists across sessions (short-term summaries + fact extraction)
-> - Timer set via voice fires notification at correct time after reboot
-> - Health endpoint returns valid JSON with all component statuses
-> - Audit log captures all tool executions and approval decisions
+> - At least 3 built-in tools callable via voice with correct Hermes template parsing — **DONE** (5 tools: clock, calculator, system_info, timer, memory)
+> - Tier 2 action triggers approval prompt on LCD; single-click approves, long-press denies — **DONE** (PermissionEngine + ApprovalManager)
+> - Conversation memory persists across sessions (short-term summaries + fact extraction) — **DONE** (SqliteMemoryStore + regex extraction)
+> - Timer set via voice fires notification at correct time after reboot — **DONE** (SchedulingService with SQLite + reboot recovery)
+> - Health endpoint returns valid JSON with all component statuses — **DONE** (HealthMonitor with CPU/memory/storage/NPU)
+> - Audit log captures all tool executions and approval decisions — **DONE** (SqliteAuditLog)
+>
+> Phase 2 validated on Pi: 497 passed (487 unit+integration + 10 peripheral HW), 7 expected HW failures. Session 17.
 
 ### Phase 3 — Web UI (Weeks 10-13)
 - Web UI framework decision — evaluate HTMX+DaisyUI vs NiceGUI vs Svelte (DD-013)
@@ -2052,5 +2054,5 @@ data/
 | DD-048 | NPU multiplexing confirmed (~0ms switch) | 2026-03-02 | Phase 1 investigation: co-resident models can be loaded and inferred concurrently via pyaxengine with negligible context-switch overhead. Tested 10 rounds alternating SenseVoice (avg 128.6ms) and Kokoro (avg 18.6ms) — switch overhead ~0ms. Confirms streaming voice pipeline (DD-031) is feasible: LLM generates sentence N+1 while TTS synthesizes sentence N. Sequential fallback mode no longer needed as primary path. |
 | DD-049 | Audio via sounddevice with ALSA default device | 2026-03-02 | Phase 1 investigation + hardware validation: Python `sounddevice` for capture and playback on WM8960. **Capture:** 16kHz mono via ALSA `default` device — routes through `/etc/asound.conf` plug→dsnoop chain that handles 2-channel WM8960 hardware. **CRITICAL: Do NOT use `hw:0,0` with channels=1** — WM8960 requires stereo capture, raw hw device with mono produces garbage audio. Confirmed by whisplay-ai-chatbot (same approach: `sox -t alsa default`). **Playback:** ALSA `default` device (dmix resamples 24kHz→48kHz for Kokoro TTS output). **Mixer tuning:** Capture=55/63, Boost=2(+20dB), ALC=OFF (compresses too aggressively), HPF=on, NoiseGate=on. DC offset removal in software (~300-600 ADC bias). **ASR verified:** SenseVoice transcribes speech accurately at these levels (0.17s inference on NPU). `scripts/setup-mixer.sh` configures all settings. |
 
-*Document version: 0.1.17 — Hardware validation: audio capture fix (ALSA default device), button GPIO thread-safety, ASR provider auto-detection, mixer tuning, E2E ASR verification*
+*Document version: 0.1.18 — Phase 2 Agent Core complete: hybrid intent router, 4-tier permissions, audit log, 5 built-in tools, memory system, scheduling, notifications, health monitor. 487 tests passing, validated on Pi.*
 *Status: DRAFT*

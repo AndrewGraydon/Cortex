@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-03-02 (Session 16)
+# Last updated: 2026-03-03 (Session 17)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -112,8 +112,8 @@ Seven-layer stack:
 ## Implementation Phases
 - **Phase 0** — Hardware foundation (COMPLETE)
 - **Phase 1** — Voice loop (COMPLETE — all milestones 1.1-4.4, 121 tests passing)
-- **Phase 2** — Agent core (tools, permissions, audit, sandbox)
-- **Phase 3** — Web UI
+- **Phase 2** — Agent core (COMPLETE — all milestones 2.1-2.8, 487 tests passing, validated on Pi)
+- **Phase 3** — Web UI (NEXT)
 - **Phase 4** — Dynamic capabilities (tool pipeline, agent factory, long-term memory)
 - **Phase 5** — IoT integration (MQTT, Home Assistant)
 - **Phase 6** — Hardening and polish
@@ -188,7 +188,7 @@ Cortex/
 ├── docs/design/             # Scope and architecture docs
 ├── docs/guides/             # Setup and operational guides
 ├── context/                 # This file and other context docs
-├── src/cortex/              # Application source (51 source files)
+├── src/cortex/              # Application source (~83 source files)
 │   ├── config.py            # Pydantic config loading cortex.yaml
 │   ├── cli.py               # Click CLI (cortex run/config/version)
 │   ├── core/                # Main service orchestrator
@@ -216,14 +216,48 @@ Cortex/
 │   │   ├── pipeline.py      # VoicePipeline (button→ASR→LLM→TTS→speaker)
 │   │   ├── sentence_detector.py # Streaming sentence boundary detection
 │   │   └── metrics.py       # Latency metrics logging
+│   ├── agent/               # Agent framework (Phase 2)
+│   │   ├── types.py         # ToolCall, ToolResult, AgentResponse, IntentMatch
+│   │   ├── protocols.py     # Tool, ActionHandler, AgentProcessor Protocols
+│   │   ├── router.py        # IntentRouter (regex, zero-LLM cost)
+│   │   ├── processor.py     # AgentProcessor (routes ASR→handler or LLM)
+│   │   ├── action_engine.py # ActionEngine (permission-gated tool execution)
+│   │   ├── scheduling.py    # SchedulingService (SQLite timers, reboot recovery)
+│   │   ├── notifications.py # NotificationService (5-level priority, DND)
+│   │   ├── health.py        # HealthMonitor (CPU/memory/storage/NPU)
+│   │   └── tools/           # Tool registry + built-in tools
+│   │       ├── registry.py  # ToolRegistry + ActionEngine
+│   │       └── builtin/     # clock, calculator, system_info, timer, memory_tool
+│   ├── reasoning/           # Reasoning core (Phase 2)
+│   │   ├── types.py         # ToolSchema, ContextBudget, AssembledPrompt
+│   │   ├── protocols.py     # ContextAssembler, ToolCallParser Protocols
+│   │   ├── tool_parser.py   # HermesToolCallParser (<tool_call> XML extraction)
+│   │   ├── context_assembler.py # Token-budgeted prompt building (P1-P7)
+│   │   ├── token_counter.py # Word-based token estimator (~1.3x)
+│   │   └── prompt_templates.py  # System prompt templates (Hermes format)
+│   ├── security/            # Security layer (Phase 2)
+│   │   ├── types.py         # PermissionTier, AuditEntry, ApprovalStatus
+│   │   ├── protocols.py     # PermissionEngine, AuditLog Protocols
+│   │   ├── permissions.py   # PermissionEngine (4-tier model)
+│   │   ├── audit.py         # SqliteAuditLog (append-only)
+│   │   └── approval.py      # ApprovalManager (button-driven approval)
+│   ├── memory/              # Memory system (Phase 2)
+│   │   ├── types.py         # MemoryEntry, MemoryCategory, ConversationSummary
+│   │   ├── protocols.py     # MemoryStore, EmbeddingService Protocols
+│   │   ├── store.py         # SqliteMemoryStore (conversations + facts + embeddings)
+│   │   ├── embedding.py     # MockEmbeddingService (SHA-256 hash-seeded 384-dim)
+│   │   ├── extraction.py    # MemoryExtractor (regex-based fact capture)
+│   │   ├── retrieval.py     # MemoryRetriever (embed→search→format for context)
+│   │   └── working.py       # WorkingMemory (wraps VoiceSession)
 │   ├── ipc/                 # ZeroMQ message bus
 │   │   ├── messages.py      # CortexMessage (JSON + ZMQ multipart)
 │   │   └── bus.py           # MessageBus (pub/sub)
 │   └── utils/               # Shared utilities
 │       └── logging.py       # Centralized structlog configuration
-├── tests/                   # Test suites (121 passing)
-│   ├── unit/                # Off-Pi tests (121 tests)
-│   └── hardware/            # Pi-only tests (7 tests, pytest -m hardware)
+├── tests/                   # Test suites (487 passing)
+│   ├── unit/                # Off-Pi tests (475 tests)
+│   ├── integration/         # Integration tests (12 tests — Phase 2 exit criteria)
+│   └── hardware/            # Pi-only tests (17 tests, pytest -m hardware)
 ├── config/                  # Config files
 │   ├── cortex.yaml.template # Config template
 │   ├── prompts/             # System prompts
@@ -267,11 +301,15 @@ Cortex/
 
 - **Session 16 (2026-03-02):** Phase 1 hardware validation on Pi. Pushed code to Pi, ran all 121 unit tests (pass). Fixed 3 critical hardware issues: **(1) Button GPIO thread-safety:** RPi.GPIO fires callbacks on background thread with no event loop — `asyncio.ensure_future()` failed. Fixed `ButtonStateMachine._schedule()` to detect calling context and use `run_coroutine_threadsafe()` from GPIO threads. **(2) ASR provider mismatch:** SenseVoice defaults to `AxEngineExecutionProvider` but AXCL runtime has `AXCLRTExecutionProvider`. Fixed asr.py to auto-detect providers. **(3) Audio capture device [ROOT CAUSE]:** Using `hw:0,0` with `channels=1` produced garbage — WM8960 hardware requires 2-channel capture. Changed `DEFAULT_CAPTURE_DEVICE` from `hw:0,0` to `default`, which routes through ALSA `plug→dsnoop` chain in `/etc/asound.conf`. Confirmed with whisplay-ai-chatbot reference (same approach). Tuned mixer: Capture=55/63, Boost=2(+20dB), ALC=OFF, HPF=on, NoiseGate=on. DC offset removal in software. **End-to-end ASR verified:** Captured speech → SenseVoice NPU transcription = "This is a test." in 0.17s. Audio quality confirmed sufficient for ASR. Updated DD-049, scope doc to v0.1.17.
 
+- **Session 17 (2026-03-03):** Phase 2 — Agent Core — COMPLETE. All 8 milestones (2.1-2.8) implemented in a single marathon session. **Milestone 2.1:** Foundation types and protocols — ToolCall, ToolResult, AgentResponse, IntentMatch, RoutingDecision; Tool, ActionHandler, AgentProcessor Protocol interfaces; PermissionTier, AuditEntry, ApprovalStatus; MemoryEntry, MemoryCategory; ToolSchema, ContextBudget, AssembledPrompt; AgentConfig, SecurityConfig, MemoryConfig Pydantic models. **Milestone 2.2:** Permission engine (4-tier: SAFE auto, NORMAL logged, RISKY button approval, DANGER requires confirmation) + SQLite append-only audit log + ApprovalManager (button-driven, SINGLE_CLICK=approve, LONG_PRESS=deny, timeout=deny). **Milestone 2.3:** HermesToolCallParser (extracts `<tool_call>` XML from Qwen3 output, handles malformed JSON), ContextAssembler (token-budgeted P1-P7 priority prompt building within 2,047 limit), word-based token estimator (~1.3x word count). **Milestone 2.4:** 5 built-in tools (clock, calculator, system_info, timer_set/query, memory_save/query), ToolRegistry, ActionEngine with permission gating and audit logging. Calculator uses safe AST evaluation. **Milestone 2.5:** IntentRouter (regex patterns for known intents — zero LLM cost) + AgentProcessor (routes ASR text to utility handler or LLM). Wired into VoicePipeline. Added `set_asr_text()` to MockNpuService for pipeline tests. **Milestone 2.6:** SqliteMemoryStore (conversations + facts + brute-force numpy cosine similarity embedding search), MockEmbeddingService (SHA-256 hash-seeded deterministic 384-dim vectors), MemoryExtractor (regex patterns: "remember that...", "my name is...", "I live in..."), MemoryRetriever (embed query → search → format as [Memory] block for P4 injection), WorkingMemory (wraps VoiceSession). Memory tools wired to real backend via `set_memory_backend()`. **Milestone 2.7:** SchedulingService (SQLite-persisted timers, asyncio scheduling, reboot recovery — fires past-due timers on startup), NotificationService (5-level P0-P4 priority queue, DND mode, session-aware queueing — P4 always interrupts, P0-P3 queued during voice sessions). **Milestone 2.8:** HealthMonitor (CPU/memory/storage/NPU health checks, overall status computation), integration tests verifying all 6 exit criteria. **Testing:** 487 unit + integration tests passing on dev machine. Full suite run on Pi: 497 passed (including 10 peripheral hardware tests), 7 expected failures (6 NPU context tests needing AXCL init, 1 button press timeout — nobody pressed it). Zero Phase 2 regressions. Lint (ruff) + mypy strict clean throughout. Updated scope doc to v0.1.18.
+
 ### NEXT SESSION — Resume Here
-**Topic:** Phase 1 hardware validation continues, then Phase 2 begins.
-- Run full combined button→LED→record→ASR test on Pi
-- Phase 2 scope: tools, permissions, audit, sandbox, model provider layer
-- MockNpuService enables all development on dev machine
+**Topic:** Phase 3 — Web UI begins.
+- Web UI framework decision needed (DD-013): HTMX+DaisyUI vs NiceGUI vs Svelte
+- FastAPI backend + WebSocket streaming for chat
+- Authentication system (bcrypt + session cookies, DD-042)
+- External services: CalDAV calendar, IMAP/SMTP email, ntfy messaging (DD-035)
+- A2A protocol: client discovery + server Agent Card (DD-036)
 
 ---
 
