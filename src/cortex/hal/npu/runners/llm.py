@@ -18,6 +18,7 @@ API format (old ax-llm binary, pre-OpenAI-compat):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -368,11 +369,8 @@ class LLMRunner:
 
         # Health check: POST /api/reset returns {"status":"ok"} when ready.
         # Use POST (not GET) because the old binary has no GET health endpoint.
-        await self._wait_for_ready(
-            f"http://127.0.0.1:{self._api_port}/api/reset",
-            timeout=120.0,
-            name="LLM API",
-        )
+        base = f"http://127.0.0.1:{self._api_port}"
+        await self._wait_for_ready(base, timeout=120.0, name="LLM API")
 
     @staticmethod
     async def _wait_for_http(url: str, timeout: float, name: str) -> None:
@@ -393,31 +391,80 @@ class LLMRunner:
         raise TimeoutError(msg)
 
     @staticmethod
-    async def _wait_for_ready(url: str, timeout: float, name: str) -> None:
-        """Poll HTTP POST endpoint until it responds or timeout.
+    async def _wait_for_ready(base_url: str, timeout: float, name: str) -> None:
+        """Wait for binary to be loaded AND idle.
 
-        The old ax-llm binary has no GET health endpoint; POST /api/reset
-        returns {"status":"ok"} when the model is loaded and ready.
-        It returns {"error":"Model initing"} while still loading.
+        The old ax-llm binary has no GET health endpoint.  POST /api/reset
+        returns {"status":"ok"} when the model is loaded and ready, but
+        the reset itself can trigger an internal generation.  After reset
+        succeeds, POST /api/stop ensures any in-flight generation is
+        aborted, then we verify the binary accepts a chat request.
         """
         deadline = asyncio.get_event_loop().time() + timeout
+        reset_url = f"{base_url}/api/reset"
+        stop_url = f"{base_url}/api/stop"
+        chat_url = f"{base_url}/api/chat"
+
         async with httpx.AsyncClient() as client:
+            # Phase 1: Poll /api/reset until model is loaded
             while asyncio.get_event_loop().time() < deadline:
                 try:
                     resp = await client.post(
-                        url, json={}, timeout=2.0,
+                        reset_url, json={}, timeout=2.0,
                         headers={"Content-Type": "application/json"},
                     )
                     if resp.status_code < 500:
                         data = resp.json()
                         if data.get("status") == "ok":
-                            logger.info("%s ready at %s", name, url)
-                            return
-                        # "Model initing" — still loading, keep polling
+                            logger.info("%s model loaded", name)
+                            break
                         logger.debug("%s still loading: %s", name, data)
                 except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException):
                     pass
                 await asyncio.sleep(1.0)
+            else:
+                msg = f"{name} failed to start within {timeout}s"
+                raise TimeoutError(msg)
 
-        msg = f"{name} failed to start within {timeout}s at {url}"
-        raise TimeoutError(msg)
+            # Phase 2: Stop any in-flight generation from the reset
+            with contextlib.suppress(
+                httpx.ConnectError, httpx.ReadError, httpx.TimeoutException,
+            ):
+                await client.post(stop_url, timeout=2.0)
+            await asyncio.sleep(1.0)
+
+            # Phase 3: Verify binary is idle (accepts a chat request)
+            for _attempt in range(5):
+                try:
+                    test_body = {"messages": [{"role": "user", "content": "ping"}]}
+                    resp = await client.post(
+                        chat_url, json=test_body, timeout=10.0,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    if resp.status_code == 200:
+                        # Drain any pending generation
+                        with contextlib.suppress(
+                            httpx.ConnectError, httpx.ReadError, httpx.TimeoutException,
+                        ):
+                            await client.post(stop_url, timeout=2.0)
+                        # Reset context so the ping message isn't in history
+                        with contextlib.suppress(
+                            httpx.ConnectError, httpx.ReadError, httpx.TimeoutException,
+                        ):
+                            await client.post(
+                                reset_url, json={}, timeout=2.0,
+                                headers={"Content-Type": "application/json"},
+                            )
+                        await asyncio.sleep(0.5)
+                        logger.info("%s ready and idle at %s", name, base_url)
+                        return
+                    logger.debug(
+                        "%s not idle yet (status %d): %s",
+                        name, resp.status_code, resp.text[:100],
+                    )
+                except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException):
+                    pass
+                await asyncio.sleep(2.0)
+
+            msg = f"{name} loaded but not accepting requests at {base_url}"
+            raise TimeoutError(msg)
