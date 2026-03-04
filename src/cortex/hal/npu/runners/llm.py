@@ -244,18 +244,22 @@ class LLMRunner:
         """
         tokenizer_url = f"http://127.0.0.1:{self._tokenizer_port}/get_uid"
 
-        # Probe for an already-running tokenizer server
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(tokenizer_url, timeout=2.0)
-                if resp.status_code < 500:
-                    logger.info(
-                        "Tokenizer already running on port %d, reusing",
-                        self._tokenizer_port,
-                    )
-                    return
-        except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException):
-            pass  # Not running, start a new one
+        # Probe for an already-running tokenizer server.
+        # Use sync httpx — the tokenizer's http.server doesn't handle async well.
+        def _probe_tokenizer() -> bool:
+            try:
+                resp = httpx.get(tokenizer_url, timeout=3.0)
+                return resp.status_code < 500
+            except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException):
+                return False
+
+        loop = asyncio.get_event_loop()
+        if await loop.run_in_executor(None, _probe_tokenizer):
+            logger.info(
+                "Tokenizer already running on port %d, reusing",
+                self._tokenizer_port,
+            )
+            return
 
         tokenizer_script = model_path / "qwen3_tokenizer_uid.py"
         if not tokenizer_script.exists():
