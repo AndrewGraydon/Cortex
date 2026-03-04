@@ -38,7 +38,7 @@ hal:
     sleep_on_battery_idle: 300  # seconds
     profiles:
       mains:
-        llm_profile: chat  # Full Qwen3-1.7B
+        llm_profile: chat  # Full Qwen3-VL-2B
         polling_multiplier: 1.0
         display_brightness: 80
       battery:
@@ -177,29 +177,23 @@ reasoning:
   profiles:
     chat:
       providers: [axcl]
-      axcl: { model: qwen3-1.7b, mode: non_thinking }
+      axcl: { model: qwen3-vl-2b, mode: non_thinking }
       # ollama: { model: qwen3:8b }  # Uncomment to add Ollama fallback
       # openai: { model: gpt-4o-mini }
     reason:
       providers: [axcl]
-      axcl: { model: qwen3-1.7b, mode: thinking }
+      axcl: { model: qwen3-vl-2b, mode: thinking }
       # anthropic: { model: claude-sonnet-4-6 }
     code:
       providers: [axcl]
-      axcl: { model: qwen3-1.7b, mode: thinking }
+      axcl: { model: qwen3-vl-2b, mode: thinking }
     quick:
       providers: [axcl]
       axcl: { model: qwen3-0.6b, mode: non_thinking }
-    vision_quick:
+    vision:
       providers: [axcl]
-      axcl: { model: smolvlm2-500m }
+      axcl: { model: qwen3-vl-2b }  # Unified text+vision model (DD-051)
       # openai: { model: gpt-4o }
-    vision_detail:
-      providers: [axcl]
-      axcl: { model: internvl3-1b }
-    vision_advanced:
-      providers: [axcl]
-      axcl: { model: qwen2.5-vl-3b }
     fallback:
       # Cloud-only profile — used when local models can't handle the task
       providers: [openai, anthropic]

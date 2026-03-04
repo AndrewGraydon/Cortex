@@ -107,7 +107,7 @@ class TestExitCriteria1ToolsCalling:
         """Test tool call through full pipeline."""
         npu = MockNpuService()
         await npu.load_model("sensevoice", Path("/mock/sv"))
-        await npu.load_model("qwen3-1.7b", Path("/mock/qwen"))
+        await npu.load_model("qwen3-vl-2b", Path("/mock/qwen3vl"))
         await npu.load_model("kokoro", Path("/mock/kokoro"))
 
         proc = AgentProcessor(registry=registry)
@@ -120,7 +120,7 @@ class TestExitCriteria1ToolsCalling:
         )
         pipe.set_handles(
             asr=npu._loaded_models["sensevoice"],
-            llm=npu._loaded_models["qwen3-1.7b"],
+            llm=npu._loaded_models["qwen3-vl-2b"],
             tts=npu._loaded_models["kokoro"],
         )
 
@@ -216,7 +216,7 @@ class TestExitCriteria5HealthEndpoint:
     async def test_health_valid_json(self) -> None:
         npu = MockNpuService()
         await npu.load_model("sensevoice", Path("/mock/sv"))
-        await npu.load_model("qwen3-1.7b", Path("/mock/qwen"))
+        await npu.load_model("qwen3-vl-2b", Path("/mock/qwen3vl"))
         await npu.load_model("kokoro", Path("/mock/kokoro"))
 
         monitor = HealthMonitor(npu=npu)

@@ -18,7 +18,7 @@ A fully local, privacy-first, voice-and-web AI assistant running on a Raspberry 
 Seven-layer stack:
 1. **HAL** — Hardware abstraction (NPU, audio, display, power)
 2. **Voice Pipeline** — Wake word → VAD → ASR → LLM → TTS → Speaker
-3. **Reasoning Core** — Qwen3-1.7B with tool calling
+3. **Reasoning Core** — Qwen3-VL-2B with tool calling + vision
 4. **Agent Framework** — Planning, tools, dynamic agent creation
 5. **Security Layer** — 4-tier permissions, sandboxing, audit
 6. **Web UI** — FastAPI + HTMX dashboard and chat
@@ -57,7 +57,7 @@ Cortex/
 
 - **Current Phase:** Phase 0 — Hardware Foundation
 - **Implementation Language:** Python 3.11+
-- **Primary LLM:** Qwen3-1.7B (on NPU)
+- **Primary VLM:** Qwen3-VL-2B (on NPU, text + vision)
 - **Target OS:** Debian 12 (Bookworm) / Raspberry Pi OS
 
 ## Documentation

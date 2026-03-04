@@ -45,7 +45,7 @@ class TestLLMRetry:
         npu = pipeline._npu
         # Inject one inference error for LLM — will be consumed on first attempt
         npu.inject_error(
-            MockError(model_id="qwen3-1.7b", error_type="inference_error", message="LLM timeout")
+            MockError(model_id="qwen3-vl-2b", error_type="inference_error", message="LLM timeout")
         )
 
         audio = _make_audio()
@@ -60,10 +60,10 @@ class TestLLMRetry:
         npu = pipeline._npu
         # Inject TWO errors — first attempt + retry both fail
         npu.inject_error(
-            MockError(model_id="qwen3-1.7b", error_type="inference_error", message="LLM fail 1")
+            MockError(model_id="qwen3-vl-2b", error_type="inference_error", message="LLM fail 1")
         )
         npu.inject_error(
-            MockError(model_id="qwen3-1.7b", error_type="inference_error", message="LLM fail 2")
+            MockError(model_id="qwen3-vl-2b", error_type="inference_error", message="LLM fail 2")
         )
 
         audio = _make_audio()

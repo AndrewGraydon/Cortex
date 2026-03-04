@@ -19,7 +19,7 @@ async def mock_npu() -> MockNpuService:
     """MockNpuService with all models pre-loaded."""
     npu = MockNpuService()
     await npu.load_model("sensevoice", Path("/mock/sensevoice"))
-    await npu.load_model("qwen3-1.7b", Path("/mock/qwen3"))
+    await npu.load_model("qwen3-vl-2b", Path("/mock/qwen3vl"))
     await npu.load_model("kokoro", Path("/mock/kokoro"))
     return npu
 
@@ -55,7 +55,7 @@ async def pipeline(
     )
     # Get the handles from already-loaded models
     asr_handle = mock_npu._loaded_models["sensevoice"]
-    llm_handle = mock_npu._loaded_models["qwen3-1.7b"]
+    llm_handle = mock_npu._loaded_models["qwen3-vl-2b"]
     tts_handle = mock_npu._loaded_models["kokoro"]
     pipe.set_handles(asr=asr_handle, llm=llm_handle, tts=tts_handle)
     return pipe

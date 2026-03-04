@@ -23,7 +23,7 @@ from cortex.hal.types import InferenceInputs
 # Standard model paths on Pi
 MODELS_DIR = Path.home() / "models"
 SENSEVOICE_DIR = MODELS_DIR / "SenseVoice"
-QWEN3_DIR = MODELS_DIR / "Qwen3-1.7B"
+QWEN3_VL_DIR = MODELS_DIR / "Qwen3-VL-2B"
 KOKORO_DIR = MODELS_DIR / "Kokoro"
 
 pytestmark = pytest.mark.hardware
@@ -39,9 +39,8 @@ async def npu() -> AsyncGenerator[AxclNpuService, Any]:
     service = AxclNpuService(
         config={
             "sensevoice": {"memory_mb": 251},
-            "qwen3-1.7b": {
-                "memory_mb": 3375,
-                "venv_python": str(Path.home() / ".venvs/axllm/bin/python3"),
+            "qwen3-vl-2b": {
+                "memory_mb": 2560,
                 "system_prompt": "You are Cortex, a helpful voice assistant.",
             },
             "kokoro": {"memory_mb": 232, "default_voice": "af_heart"},
@@ -90,26 +89,26 @@ class TestASRHardware:
         assert "sensevoice" not in status.models_loaded
 
 
-class TestLLMHardware:
-    async def test_qwen3_load_and_infer(self, npu: AxclNpuService) -> None:
-        """Load Qwen3-1.7B and generate a response."""
-        if not QWEN3_DIR.exists():
-            pytest.skip("Qwen3-1.7B model not found")
+class TestVLMHardware:
+    async def test_qwen3_vl_load_and_infer(self, npu: AxclNpuService) -> None:
+        """Load Qwen3-VL-2B and generate a text response."""
+        if not QWEN3_VL_DIR.exists():
+            pytest.skip("Qwen3-VL-2B model not found")
 
-        handle = await npu.load_model("qwen3-1.7b", QWEN3_DIR)
-        assert handle.model_id == "qwen3-1.7b"
+        handle = await npu.load_model("qwen3-vl-2b", QWEN3_VL_DIR)
+        assert handle.model_id == "qwen3-vl-2b"
 
         result = await npu.infer(handle, InferenceInputs(data="What is 2+2?"))
         assert isinstance(result.data, str)
         assert len(result.data) > 0
         assert result.metadata.get("finish_reason") == "stop"
 
-    async def test_qwen3_streaming(self, npu: AxclNpuService) -> None:
-        """Stream tokens from Qwen3."""
-        if not QWEN3_DIR.exists():
-            pytest.skip("Qwen3-1.7B model not found")
+    async def test_qwen3_vl_streaming(self, npu: AxclNpuService) -> None:
+        """Stream tokens from Qwen3-VL-2B."""
+        if not QWEN3_VL_DIR.exists():
+            pytest.skip("Qwen3-VL-2B model not found")
 
-        handle = await npu.load_model("qwen3-1.7b", QWEN3_DIR)
+        handle = await npu.load_model("qwen3-vl-2b", QWEN3_VL_DIR)
         chunks: list[str] = []
         async for output in npu.infer_stream(handle, InferenceInputs(data="Say hello")):
             chunks.append(str(output.data))
@@ -117,6 +116,17 @@ class TestLLMHardware:
         assert len(chunks) > 0
         full_text = "".join(chunks)
         assert len(full_text) > 0
+
+    async def test_qwen3_vl_think_tag_stripping(self, npu: AxclNpuService) -> None:
+        """Verify think tags are stripped from Qwen3-VL-2B output."""
+        if not QWEN3_VL_DIR.exists():
+            pytest.skip("Qwen3-VL-2B model not found")
+
+        handle = await npu.load_model("qwen3-vl-2b", QWEN3_VL_DIR)
+        result = await npu.infer(handle, InferenceInputs(data="What is 2+2? Be brief."))
+        # Output should not contain think tags (VLMRunner strips them)
+        assert "<think>" not in str(result.data)
+        assert "</think>" not in str(result.data)
 
 
 class TestTTSHardware:
@@ -163,13 +173,13 @@ class TestMultiModelHardware:
         assert len(status.models_loaded) == 2
 
     async def test_full_pipeline_cycle(self, npu: AxclNpuService) -> None:
-        """Full ASR → LLM → TTS cycle on real hardware."""
-        for d in [SENSEVOICE_DIR, QWEN3_DIR, KOKORO_DIR]:
+        """Full ASR → VLM → TTS cycle on real hardware."""
+        for d in [SENSEVOICE_DIR, QWEN3_VL_DIR, KOKORO_DIR]:
             if not d.exists():
                 pytest.skip(f"Model not found: {d}")
 
         asr_handle = await npu.load_model("sensevoice", SENSEVOICE_DIR)
-        llm_handle = await npu.load_model("qwen3-1.7b", QWEN3_DIR)
+        llm_handle = await npu.load_model("qwen3-vl-2b", QWEN3_VL_DIR)
         tts_handle = await npu.load_model("kokoro", KOKORO_DIR)
 
         # ASR: transcribe silence (will get empty/short text)

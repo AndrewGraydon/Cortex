@@ -24,7 +24,7 @@ class TestSystemHealth:
                 ComponentHealth(name="cpu", status="healthy", details={"load_1m": 0.5}),
                 ComponentHealth(name="memory", status="healthy", details={"used_pct": 45.0}),
             ],
-            models_loaded=["sensevoice", "qwen3-1.7b"],
+            models_loaded=["sensevoice", "qwen3-vl-2b"],
             timestamp=1000.0,
         )
         d = health.to_dict()
@@ -75,12 +75,12 @@ class TestHealthMonitorWithNpu:
     async def test_check_with_mock_npu(self) -> None:
         npu = MockNpuService()
         await npu.load_model("sensevoice", Path("/mock/sv"))
-        await npu.load_model("qwen3-1.7b", Path("/mock/qwen"))
+        await npu.load_model("qwen3-vl-2b", Path("/mock/qwen3vl"))
 
         monitor = HealthMonitor(npu=npu)
         health = await monitor.check()
         assert "sensevoice" in health.models_loaded
-        assert "qwen3-1.7b" in health.models_loaded
+        assert "qwen3-vl-2b" in health.models_loaded
         # NPU component should be present
         npu_comp = [c for c in health.components if c.name == "npu"]
         assert len(npu_comp) == 1

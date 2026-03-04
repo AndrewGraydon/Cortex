@@ -2,10 +2,10 @@
 
 Implements the NpuService Protocol using a registry of ModelRunners.
 Each model type (LLM, ASR, TTS, VLM) has a dedicated runner:
-  - LLM: C++ API binary subprocess (DD-046)
+  - VLM: axllm serve subprocess, OpenAI-compat API (DD-051, Qwen3-VL-2B)
+  - LLM: C++ API binary subprocess (DD-046, Qwen3-0.6B/1.7B legacy)
   - ASR: pyaxengine InferenceSession (DD-046)
   - TTS: pyaxengine + onnxruntime (DD-046)
-  - VLM: stub for Phase 1
 
 NPU multiplexing confirmed with ~0ms switch overhead (DD-048).
 """
@@ -31,9 +31,13 @@ from cortex.hal.types import (
 
 logger = logging.getLogger(__name__)
 
-# Model ID → runner type mapping
+# Model ID → runner type mapping.
+# Order matters: _classify_model() uses substring matching and returns
+# the first match. "qwen3-vl" must precede "qwen3-" entries because
+# "qwen3-vl-2b" contains "qwen3" as a substring.
 MODEL_RUNNER_MAP: dict[str, str] = {
     "sensevoice": "asr",
+    "qwen3-vl": "vlm",
     "qwen3-1.7b": "llm",
     "qwen3-0.6b": "llm",
     "kokoro": "tts",
@@ -180,9 +184,9 @@ class AxclNpuService:
         )
 
     async def reset_llm_context(self, system_prompt: str | None = None) -> None:
-        """Reset LLM KV cache (convenience method for voice pipeline)."""
+        """Reset LLM/VLM KV cache (convenience method for voice pipeline)."""
         for runner in self._runners.values():
-            if isinstance(runner, LLMRunner):
+            if isinstance(runner, (LLMRunner, VLMRunner)):
                 await runner.reset_context(system_prompt)
 
     async def shutdown(self) -> None:

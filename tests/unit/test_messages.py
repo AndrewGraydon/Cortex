@@ -16,7 +16,7 @@ class TestCortexMessage:
     def test_json_round_trip(self) -> None:
         msg = CortexMessage(
             topic="npu.model_loaded",
-            payload={"model_id": "qwen3-1.7b", "memory_mb": 3375},
+            payload={"model_id": "qwen3-vl-2b", "memory_mb": 2560},
         )
         json_str = msg.to_json()
         restored = CortexMessage.from_json(json_str)

@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-03-03 (Session 18)
+# Last updated: 2026-03-04 (Session 20)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -308,15 +308,47 @@ Cortex/
 
 - **Session 18 (2026-03-03):** Pre-Phase 3 analysis. Reviewed Anthropic's "Complete Guide to Building Skills for Claude" PDF — comprehensive architecture for instruction-based tool enhancement. Identified strong parallels with Cortex: progressive disclosure maps to 2,047-token context budget (P1-P7), MCP+Skills pattern maps to MCP+action templates, 5 skill patterns (sequential workflow, multi-MCP coordination, iterative refinement, context-aware selection, domain-specific intelligence) map to agent hierarchy. Added DD-050: Script-based tools with progressive disclosure — self-contained TOOL.yaml + scripts/ folders as alternative to Python handler classes. Updated scope doc §4.4.5 (Action Engine) with full script tool specification, §4.4.7 (Tool Development Pipeline) to support both Python and script formats, Phase 3 deliverables (script tool loader + MCP workflow templates), Phase 4 deliverables (user-created script tools + bubblewrap sandbox + new exit criterion). Updated scope doc to v0.1.19.
 
+- **Session 19 (2026-03-04):** Phase 3a — Web Foundation — COMPLETE (736 tests, 7 milestones). NPU hardware test debugging and fixes — all 7 NPU hardware tests now pass including full ASR→LLM→TTS pipeline. Key findings and fixes:
+
+  **Phase 3a (Web Foundation, 7 milestones):** FastAPI + HTMX/DaisyUI web UI with Jinja2 templates. M3a.1: App shell + template infrastructure. M3a.2: Auth (bcrypt password + SQLite sessions + CSRF). M3a.3: Chat with WebSocket streaming (WebChatSession wrapping VoiceSession). M3a.4: Dashboard + health (HTMX polling, wired to HealthMonitor/SchedulingService). M3a.5: Web approval flows + notification center (dual-channel button+web approval). M3a.6: Tool manager + script tool loader (DD-050, TOOL.yaml discovery, subprocess JSON protocol). M3a.7: Settings + security console + integration testing. New deps: jinja2, python-multipart, bcrypt, itsdangerous. 736 tests passing, all exit criteria met.
+
+  **NPU hardware test fixes (6 bugs):**
+  1. **axengine re-init crash:** `axclrtEngineInit` is process-global — calling it per-session crashes. Created `_axengine_compat.py` monkey-patch module: checks `_is_axclrt_engine_initialized` flag, skips re-init.
+  2. **Thread context not bound:** NPU context bound to first thread only; new executor threads fail with "hasn't binded any context yet". Fix: save context from first session, rebind via `axclrtSetCurrentContext` on new threads.
+  3. **`__del__` crash at shutdown:** CFFI objects become None during Python interpreter shutdown. Fix: null guard + try/except in patched `__del__`.
+  4. **Tokenizer probe failure:** httpx AsyncClient gets ReadTimeout with Python's `http.server`. Fix: sync `httpx.get()` via `run_in_executor`.
+  5. **LLM API format mismatch:** Binary on Pi is OLD ax-llm (pre-OpenAI-compat) using proprietary endpoints `/api/chat`, `/api/generate`, `/api/generate_provider`, `/api/reset`, `/api/stop`. NOT `/v1/chat/completions`. Rewrote LLMRunner for old API: `messages` as array, response in `{"done":true,"message":"..."}` format, streaming via generate+poll.
+  6. **Startup race condition:** `/api/reset` during binary startup triggers internal generation. First `/api/chat` returns 400 "llm is running". Fix: 3-phase `_wait_for_ready` — poll reset → stop → verify idle with test chat.
+
+  **New files:** `src/cortex/hal/npu/_axengine_compat.py` (axengine 0.1.3 monkey-patches), `scripts/patch-axengine.sh` (vendor patch script). **Modified:** `runners/llm.py` (old API format), `runners/asr.py` + `runners/tts.py` (compat patch calls), `tests/hardware/hal/test_axcl_npu_hw.py` (module-scoped fixture).
+
+  **ax-llm upgrade path:** New `axllm serve` on GitHub (branch `axllm`) is OpenAI-compatible (`/v1/chat/completions`, SSE streaming, integrated tokenizer). No prebuilt binary — requires compile from source via `install.sh`. When upgraded, LLMRunner reverts to simpler OpenAI-compatible client, tokenizer server no longer needed. Provider interchangeability already architected via HAL protocol layer — different LLM providers are different runner implementations.
+
+- **Session 20 (2026-03-04):** Model migration: Qwen3-1.7B + FastVLM-0.5B → Qwen3-VL-2B-Instruct-GPTQ-Int4 (DD-051). Researched Qwen3.5 feasibility (rejected — Gated Delta Network not supported by AX8850). Found AXERA-TECH pre-compiled Qwen3-VL-2B: 14.1 tok/s (1.8x faster), 2,560 MiB (1,607 MiB savings), built-in vision, OpenAI-compat API via `axllm serve`. Six-milestone migration:
+
+  **M1: VLM Runner rewrite** — New `runners/vlm.py`: single `axllm serve` subprocess, OpenAI `/v1/chat/completions`, SSE streaming with incremental think-tag stripping (`_safe_clean()` holds back incomplete `<think>` blocks), binary discovery, vision support via `image_base64` params. 30 unit tests.
+
+  **M2: NPU service updates** — `axcl.py`: Added `"qwen3-vl": "vlm"` to MODEL_RUNNER_MAP (before "qwen3-1.7b" for correct substring matching), `reset_llm_context()` handles VLMRunner. `mock.py`: Added "qwen3-vl-2b" model size (2560), classify VLM before LLM, route VLM through LLM mock paths.
+
+  **M3: Core service + config** — `service.py`: model loading uses "qwen3-vl-2b" / "Qwen3-VL-2B". `cortex.yaml.template`: reasoning profiles updated, 3 vision profiles consolidated to 1.
+
+  **M4: Test suite** — All test files updated (qwen3-1.7b → qwen3-vl-2b, 3375→2560 memory). 765 tests passing (736 + 29 new VLM runner tests). Lint + mypy clean.
+
+  **M5: Hardware testing** — Test file updated for Qwen3-VL-2B (QWEN3_VL_DIR, no venv_python, think-tag test). Needs Pi deployment: download model + axllm binary.
+
+  **M6: Documentation** — DD-051 added to scope doc (v0.1.22). CLAUDE.md, README.md, MEMORY.md, project-context.md updated. Memory budget: 3,043 MiB (43% of 7,040 MiB).
+
+  **New memory budget:** SenseVoice (251) + Qwen3-VL-2B (2,560) + Kokoro (232) = 3,043 MiB — 56.8% headroom (was 29.7%). Old LLMRunner kept for Qwen3-0.6B backward compat.
+
 ### NEXT SESSION — Resume Here
-**Topic:** Phase 3 — Web UI begins.
-- Web UI framework decision needed (DD-013): HTMX+DaisyUI vs NiceGUI vs Svelte
-- FastAPI backend + WebSocket streaming for chat
-- Authentication system (bcrypt + session cookies, DD-042)
-- Script-based tool loader for ToolRegistry (DD-050)
-- YAML workflow templates for MCP tool orchestration (DD-050)
+**Topic:** Hardware validation of Qwen3-VL-2B on Pi, then Phase 3b.
+- **Pi M5:** Download `AXERA-TECH/Qwen3-VL-2B-Instruct-GPTQ-Int4`, get `axllm` binary, run `make test-hw`
+- Phase 3b: External services, MCP server, A2A
 - External services: CalDAV calendar, IMAP/SMTP email, ntfy messaging (DD-035)
+- MCP server: expose Cortex tools to external clients (DD-019)
 - A2A protocol: client discovery + server Agent Card (DD-036)
+- Browser voice input (getUserMedia + audio streaming)
+- HTTPS / Caddy / TOTP 2FA (deployment hardening)
 
 ---
 

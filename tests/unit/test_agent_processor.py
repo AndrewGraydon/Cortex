@@ -103,7 +103,7 @@ class TestPipelineIntegration:
         from pathlib import Path
 
         await npu.load_model("sensevoice", Path("/mock/sensevoice"))
-        await npu.load_model("qwen3-1.7b", Path("/mock/qwen3"))
+        await npu.load_model("qwen3-vl-2b", Path("/mock/qwen3vl"))
         await npu.load_model("kokoro", Path("/mock/kokoro"))
 
         processor = AgentProcessor(registry=registry)
@@ -117,7 +117,7 @@ class TestPipelineIntegration:
         )
         pipe.set_handles(
             asr=npu._loaded_models["sensevoice"],
-            llm=npu._loaded_models["qwen3-1.7b"],
+            llm=npu._loaded_models["qwen3-vl-2b"],
             tts=npu._loaded_models["kokoro"],
         )
         return pipe

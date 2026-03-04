@@ -29,8 +29,8 @@ from cortex.voice.types import (
 
 class TestModelHandle:
     def test_frozen(self) -> None:
-        h = ModelHandle(model_id="qwen3-1.7b")
-        assert h.model_id == "qwen3-1.7b"
+        h = ModelHandle(model_id="qwen3-vl-2b")
+        assert h.model_id == "qwen3-vl-2b"
 
     def test_equality_by_model_id(self) -> None:
         h1 = ModelHandle(model_id="sensevoice")
@@ -64,7 +64,7 @@ class TestNpuStatus:
             temperature_c=62.0,
             memory_used_mb=4950,
             memory_total_mb=7040,
-            models_loaded=["sensevoice", "qwen3-1.7b"],
+            models_loaded=["sensevoice", "qwen3-vl-2b"],
         )
         assert s.temperature_c == 62.0
         assert len(s.models_loaded) == 2

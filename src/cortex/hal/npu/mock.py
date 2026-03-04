@@ -1,8 +1,8 @@
 """Mock NPU service for off-Pi development and testing.
 
-Simulates realistic timing based on Phase 0 measured benchmarks:
+Simulates realistic timing based on measured benchmarks:
 - SenseVoice ASR: RTF 0.028 (36x real-time)
-- Qwen3-1.7B LLM: 7.70 tok/s, prefill ~1.0s
+- Qwen3-VL-2B VLM: 14.1 tok/s, prefill ~1.0s (DD-051)
 - Kokoro TTS: RTF 0.115, 9s init
 """
 
@@ -64,10 +64,11 @@ class MockNpuService:
     _memory_used_mb: int = 0
     _asr_text: str | None = None
 
-    # Model memory sizes (from Phase 0 measurements)
+    # Model memory sizes (from measured benchmarks)
     _model_sizes: dict[str, int] = field(
         default_factory=lambda: {
             "sensevoice": 251,
+            "qwen3-vl-2b": 2560,
             "qwen3-1.7b": 3375,
             "qwen3-0.6b": 2011,
             "kokoro": 232,
@@ -129,7 +130,7 @@ class MockNpuService:
             return await self._mock_asr(inputs)
         elif model_type == "tts":
             return await self._mock_tts(inputs)
-        elif model_type == "llm":
+        elif model_type in ("llm", "vlm"):
             return await self._mock_llm_full(inputs)
         else:
             return InferenceOutputs(data="mock output", metadata={"model": handle.model_id})
@@ -145,7 +146,7 @@ class MockNpuService:
 
         model_type = self._classify_model(handle.model_id)
 
-        if model_type == "llm":
+        if model_type in ("llm", "vlm"):
             async for chunk in self._mock_llm_stream(inputs):
                 yield chunk
         else:
@@ -173,6 +174,8 @@ class MockNpuService:
             return "asr"
         elif "kokoro" in model_id:
             return "tts"
+        elif "qwen" in model_id and "vl" in model_id:
+            return "vlm"
         elif "qwen" in model_id:
             return "llm"
         elif "vlm" in model_id or "vl" in model_id:

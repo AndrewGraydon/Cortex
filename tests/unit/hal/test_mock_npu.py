@@ -26,11 +26,11 @@ class TestModelLifecycle:
 
     async def test_load_multiple_models(self, mock_npu: MockNpuService) -> None:
         await mock_npu.load_model("sensevoice", Path("/models/sensevoice"))
-        await mock_npu.load_model("qwen3-1.7b", Path("/models/qwen3"))
+        await mock_npu.load_model("qwen3-vl-2b", Path("/models/qwen3vl"))
         await mock_npu.load_model("kokoro", Path("/models/kokoro"))
         status = await mock_npu.get_status()
         assert len(status.models_loaded) == 3
-        assert status.memory_used_mb == 251 + 3375 + 232
+        assert status.memory_used_mb == 251 + 2560 + 232
 
     async def test_unload_model(self, mock_npu: MockNpuService) -> None:
         handle = await mock_npu.load_model("sensevoice", Path("/models/sensevoice"))
@@ -42,7 +42,7 @@ class TestModelLifecycle:
     async def test_oom_on_overload(self, mock_npu: MockNpuService) -> None:
         """Cannot load models exceeding total NPU memory."""
         mock_npu.total_memory_mb = 4000
-        await mock_npu.load_model("qwen3-1.7b", Path("/models/qwen3"))  # 3375MB
+        await mock_npu.load_model("qwen3-vl-2b", Path("/models/qwen3vl"))  # 2560MB
         with pytest.raises(RuntimeError, match="OOM"):
             await mock_npu.load_model("qwen3-0.6b", Path("/models/qwen06"))  # 2011MB > remaining
 
@@ -66,7 +66,7 @@ class TestASRInference:
 
 class TestLLMInference:
     async def test_llm_full_response(self, mock_npu: MockNpuService) -> None:
-        handle = await mock_npu.load_model("qwen3-1.7b", Path("/models/qwen3"))
+        handle = await mock_npu.load_model("qwen3-vl-2b", Path("/models/qwen3vl"))
         inputs = InferenceInputs(data="What can you do?")
         result = await mock_npu.infer(handle, inputs)
         assert isinstance(result.data, str)
@@ -74,7 +74,7 @@ class TestLLMInference:
         assert result.metadata["finish_reason"] == "stop"
 
     async def test_llm_streaming(self, mock_npu: MockNpuService) -> None:
-        handle = await mock_npu.load_model("qwen3-1.7b", Path("/models/qwen3"))
+        handle = await mock_npu.load_model("qwen3-vl-2b", Path("/models/qwen3vl"))
         inputs = InferenceInputs(data="Hello")
 
         chunks: list[str] = []
@@ -88,7 +88,7 @@ class TestLLMInference:
         # (checked via metadata in the stream)
 
     async def test_llm_cycles_responses(self, mock_npu: MockNpuService) -> None:
-        handle = await mock_npu.load_model("qwen3-1.7b", Path("/models/qwen3"))
+        handle = await mock_npu.load_model("qwen3-vl-2b", Path("/models/qwen3vl"))
         inputs = InferenceInputs(data="test")
         r1 = await mock_npu.infer(handle, inputs)
         r2 = await mock_npu.infer(handle, inputs)
@@ -116,10 +116,10 @@ class TestErrorInjection:
             await mock_npu.load_model("sensevoice", Path("/models/sensevoice"))
 
     async def test_inference_error(self, mock_npu: MockNpuService) -> None:
-        handle = await mock_npu.load_model("qwen3-1.7b", Path("/models/qwen3"))
+        handle = await mock_npu.load_model("qwen3-vl-2b", Path("/models/qwen3vl"))
         mock_npu.inject_error(
             MockError(
-                model_id="qwen3-1.7b", error_type="inference_error", message="Inference timeout"
+                model_id="qwen3-vl-2b", error_type="inference_error", message="Inference timeout"
             )
         )
         with pytest.raises(RuntimeError, match="Inference timeout"):
@@ -152,7 +152,7 @@ class TestUnloadedModelRejection:
             await mock_npu.infer(handle, InferenceInputs(data="test"))
 
     async def test_stream_unloaded_model(self, mock_npu: MockNpuService) -> None:
-        handle = await mock_npu.load_model("qwen3-1.7b", Path("/m"))
+        handle = await mock_npu.load_model("qwen3-vl-2b", Path("/m/qwen3vl"))
         await mock_npu.unload_model(handle)
         with pytest.raises(RuntimeError, match="not loaded"):
             async for _ in mock_npu.infer_stream(handle, InferenceInputs(data="test")):
@@ -172,7 +172,7 @@ class TestFullPipelineCycle:
         """Full voice pipeline mock: ASR → LLM → TTS."""
         # Load all models
         asr_handle = await mock_npu.load_model("sensevoice", Path("/m"))
-        llm_handle = await mock_npu.load_model("qwen3-1.7b", Path("/m"))
+        llm_handle = await mock_npu.load_model("qwen3-vl-2b", Path("/m/qwen3vl"))
         tts_handle = await mock_npu.load_model("kokoro", Path("/m"))
 
         # ASR
@@ -199,4 +199,4 @@ class TestFullPipelineCycle:
 
         # Verify memory
         status = await mock_npu.get_status()
-        assert status.memory_used_mb == 251 + 3375 + 232
+        assert status.memory_used_mb == 251 + 2560 + 232

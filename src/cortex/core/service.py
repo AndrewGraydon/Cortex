@@ -139,14 +139,14 @@ class CortexService:
         logger.info("Loading models...")
 
         asr_path = self._models_dir / "SenseVoice"
-        llm_path = self._models_dir / "Qwen3-1.7B"
+        llm_path = self._models_dir / "Qwen3-VL-2B"
         tts_path = self._models_dir / "Kokoro"
 
         self._asr_handle = await self._npu.load_model("sensevoice", asr_path)
         logger.info("ASR model loaded", model="sensevoice")
 
-        self._llm_handle = await self._npu.load_model("qwen3-1.7b", llm_path)
-        logger.info("LLM model loaded", model="qwen3-1.7b")
+        self._llm_handle = await self._npu.load_model("qwen3-vl-2b", llm_path)
+        logger.info("VLM model loaded", model="qwen3-vl-2b")
 
         self._tts_handle = await self._npu.load_model("kokoro", tts_path)
         logger.info("TTS model loaded", model="kokoro")
