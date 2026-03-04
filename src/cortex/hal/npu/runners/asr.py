@@ -107,6 +107,11 @@ class ASRRunner:
         try:
             import axengine as axe
 
+            # Apply compat patches for axengine 0.1.3 lifecycle bugs
+            from cortex.hal.npu._axengine_compat import patch as _patch_axengine
+
+            _patch_axengine()
+
             providers = axe.get_available_providers()
             logger.info("Available axengine providers: %s", providers)
         except ImportError:

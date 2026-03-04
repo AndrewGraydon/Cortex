@@ -89,6 +89,14 @@ class TTSRunner:
         if path_str not in sys.path:
             sys.path.insert(0, path_str)
 
+        # Apply compat patches for axengine 0.1.3 lifecycle bugs
+        try:
+            from cortex.hal.npu._axengine_compat import patch as _patch_axengine
+
+            _patch_axengine()
+        except ImportError:
+            pass
+
         # Import Kokoro
         mod = importlib.import_module("kokoro_ax")
         kokoro_cls = mod.Kokoro
