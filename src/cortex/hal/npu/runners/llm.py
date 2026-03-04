@@ -350,7 +350,7 @@ class LLMRunner:
 
         await self._wait_for_http(
             f"http://127.0.0.1:{self._api_port}/v1/models",
-            timeout=60.0,
+            timeout=120.0,
             name="LLM API",
         )
 
