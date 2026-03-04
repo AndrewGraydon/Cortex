@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Settings — Cortex{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Settings</h1>
+
+<div class="space-y-4" id="settings-sections">
+    <!-- System -->
+    <div class="collapse collapse-arrow bg-base-100 shadow-sm" id="section-system">
+        <input type="radio" name="settings-accordion" checked="checked" />
+        <div class="collapse-title text-lg font-medium">System</div>
+        <div class="collapse-content"
+             hx-get="/api/settings/system"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <p class="text-base-content/50">Loading...</p>
+        </div>
+    </div>
+
+    <!-- Voice -->
+    <div class="collapse collapse-arrow bg-base-100 shadow-sm" id="section-voice">
+        <input type="radio" name="settings-accordion" />
+        <div class="collapse-title text-lg font-medium">Voice</div>
+        <div class="collapse-content"
+             hx-get="/api/settings/voice"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <p class="text-base-content/50">Loading...</p>
+        </div>
+    </div>
+
+    <!-- Reasoning -->
+    <div class="collapse collapse-arrow bg-base-100 shadow-sm" id="section-reasoning">
+        <input type="radio" name="settings-accordion" />
+        <div class="collapse-title text-lg font-medium">Reasoning</div>
+        <div class="collapse-content"
+             hx-get="/api/settings/reasoning"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <p class="text-base-content/50">Loading...</p>
+        </div>
+    </div>
+
+    <!-- Agent -->
+    <div class="collapse collapse-arrow bg-base-100 shadow-sm" id="section-agent">
+        <input type="radio" name="settings-accordion" />
+        <div class="collapse-title text-lg font-medium">Agent</div>
+        <div class="collapse-content"
+             hx-get="/api/settings/agent"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <p class="text-base-content/50">Loading...</p>
+        </div>
+    </div>
+
+    <!-- Security -->
+    <div class="collapse collapse-arrow bg-base-100 shadow-sm" id="section-security">
+        <input type="radio" name="settings-accordion" />
+        <div class="collapse-title text-lg font-medium">Security</div>
+        <div class="collapse-content"
+             hx-get="/api/settings/security"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <p class="text-base-content/50">Loading...</p>
+        </div>
+    </div>
+
+    <!-- Web -->
+    <div class="collapse collapse-arrow bg-base-100 shadow-sm" id="section-web">
+        <input type="radio" name="settings-accordion" />
+        <div class="collapse-title text-lg font-medium">Web</div>
+        <div class="collapse-content"
+             hx-get="/api/settings/web"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <p class="text-base-content/50">Loading...</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

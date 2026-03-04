@@ -90,6 +90,7 @@ class SqliteAuditLog:
         action_type: str | None = None,
         since: float | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[AuditEntry]:
         """Query audit entries with optional filters."""
         if self._db is None:
@@ -107,8 +108,9 @@ class SqliteAuditLog:
             params.append(since)
 
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM audit_log{where} ORDER BY timestamp DESC LIMIT ?"
+        sql = f"SELECT * FROM audit_log{where} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
         params.append(limit)
+        params.append(offset)
 
         rows: list[AuditEntry] = []
         async with self._db.execute(sql, params) as cursor:

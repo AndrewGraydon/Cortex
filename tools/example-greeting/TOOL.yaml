@@ -1,0 +1,14 @@
+name: greeting
+description: Greet the user by name
+version: 1
+permission_tier: 0
+triggers:
+  - '(?:greet|say hello to)\s+(?P<name>\w+)'
+keywords: [greet, hello, hi, greeting]
+parameters:
+  name:
+    type: string
+    required: true
+    description: Name of person to greet
+entry_point: scripts/run.py
+timeout_seconds: 5

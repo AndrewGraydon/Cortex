@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Cortex — Home{% endblock %}
+
+{% block content %}
+<div class="hero min-h-[60vh]">
+    <div class="hero-content text-center">
+        <div class="max-w-md">
+            <h1 class="text-5xl font-bold">Cortex</h1>
+            <p class="py-6">Local AI voice assistant — private, fast, always available.</p>
+            <div class="flex gap-4 justify-center">
+                <a href="/chat" class="btn btn-primary">Chat</a>
+                <a href="/dashboard" class="btn btn-outline">Dashboard</a>
+            </div>
+            <div class="mt-8">
+                {% include "components/status_indicator.html" %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

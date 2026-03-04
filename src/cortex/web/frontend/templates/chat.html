@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block title %}Chat — Cortex{% endblock %}
+
+{% block content %}
+<div class="flex flex-col h-[calc(100vh-8rem)]">
+    <!-- Messages area -->
+    <div id="chat-container" class="flex-1 overflow-y-auto p-4 space-y-2">
+        <div id="messages">
+            <!-- Chat bubbles are injected here via WebSocket -->
+        </div>
+    </div>
+
+    <!-- Input area -->
+    <div class="p-4 border-t border-base-300">
+        <form id="chat-form" class="flex gap-2" onsubmit="sendMessage(event)">
+            <input
+                type="text"
+                id="chat-input"
+                placeholder="Type a message..."
+                class="input input-bordered flex-1"
+                autocomplete="off"
+                autofocus
+            />
+            <button type="submit" class="btn btn-primary">Send</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let ws = null;
+
+function connectWebSocket() {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const url = `${protocol}//${window.location.host}/ws/chat`;
+    ws = new WebSocket(url);
+
+    ws.onopen = function() {
+        console.log("Chat WebSocket connected");
+    };
+
+    ws.onmessage = function(event) {
+        // Server sends HTML partials with hx-swap-oob
+        // We need to process them manually since we're not using HTMX ws extension directly
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(event.data, "text/html");
+        const oobElements = doc.querySelectorAll("[hx-swap-oob]");
+
+        oobElements.forEach(function(el) {
+            const targetId = el.id;
+            const target = document.getElementById(targetId);
+            if (target) {
+                // beforeend: append children
+                while (el.firstChild) {
+                    target.appendChild(el.firstChild);
+                }
+            }
+        });
+
+        // Auto-scroll to bottom
+        const container = document.getElementById("chat-container");
+        if (container) {
+            container.scrollTop = container.scrollHeight;
+        }
+    };
+
+    ws.onclose = function() {
+        console.log("Chat WebSocket disconnected, reconnecting in 2s...");
+        setTimeout(connectWebSocket, 2000);
+    };
+
+    ws.onerror = function(err) {
+        console.error("WebSocket error:", err);
+    };
+}
+
+function sendMessage(event) {
+    event.preventDefault();
+    const input = document.getElementById("chat-input");
+    const message = input.value.trim();
+    if (!message || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+    ws.send(JSON.stringify({message: message}));
+    input.value = "";
+    input.focus();
+}
+
+// Connect on page load
+connectWebSocket();
+</script>
+{% endblock %}

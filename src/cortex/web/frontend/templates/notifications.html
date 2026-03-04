@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Notifications — Cortex{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Notifications</h1>
+
+<!-- Live toast area -->
+<div id="toast-container" class="fixed top-20 right-4 z-50 w-80 space-y-2">
+    <!-- Toasts are injected here via WebSocket -->
+</div>
+
+<!-- Pending approval card -->
+<div id="approval-container" class="mb-6"
+     hx-get="/api/approvals/pending"
+     hx-trigger="load, every 3s"
+     hx-swap="none"
+     hx-on::after-request="updateApproval(event)">
+    <div id="approval-card"></div>
+</div>
+
+<!-- Notification history -->
+<div id="notification-list"
+     hx-get="/api/notifications"
+     hx-trigger="load, every 10s"
+     hx-swap="none"
+     hx-on::after-request="updateNotificationList(event)">
+    <div class="space-y-2" id="notification-items">
+        <p class="text-base-content/50">Loading notifications...</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Connect notification WebSocket
+(function() {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/notifications`);
+    ws.onmessage = function(event) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(event.data, "text/html");
+        const oob = doc.querySelectorAll("[hx-swap-oob]");
+        oob.forEach(function(el) {
+            const target = document.getElementById(el.id);
+            if (target) {
+                target.insertAdjacentHTML("afterbegin", el.innerHTML);
+            }
+        });
+        // Auto-dismiss toasts after 10s
+        setTimeout(function() {
+            const container = document.getElementById("toast-container");
+            if (container && container.lastElementChild) {
+                container.lastElementChild.remove();
+            }
+        }, 10000);
+    };
+})();
+
+function updateApproval(event) {
+    try {
+        const data = JSON.parse(event.detail.xhr.responseText);
+        const card = document.getElementById("approval-card");
+        if (!data.pending) {
+            card.innerHTML = "";
+            return;
+        }
+        const p = data.pending;
+        card.innerHTML = `
+            <div class="alert alert-warning shadow-lg">
+                <div>
+                    <strong>Approval Required (Tier ${p.tier})</strong>
+                    <p>${p.description}</p>
+                </div>
+                <div class="flex gap-2">
+                    <button class="btn btn-sm btn-success"
+                            hx-post="/api/approvals/${p.request_id}/approve"
+                            hx-swap="none">Approve</button>
+                    <button class="btn btn-sm btn-error"
+                            hx-post="/api/approvals/${p.request_id}/deny"
+                            hx-swap="none">Deny</button>
+                </div>
+            </div>`;
+        htmx.process(card);
+    } catch(e) { console.error("Failed to update approval:", e); }
+}
+
+function updateNotificationList(event) {
+    try {
+        const data = JSON.parse(event.detail.xhr.responseText);
+        const items = document.getElementById("notification-items");
+        if (!data.notifications || data.notifications.length === 0) {
+            items.innerHTML = '<p class="text-base-content/50">No notifications yet</p>';
+            return;
+        }
+        items.innerHTML = data.notifications.map(n => {
+            const badge = n.priority >= 3 ? "badge-error" : n.priority >= 2 ? "badge-warning" : "badge-info";
+            const time = new Date(n.timestamp * 1000).toLocaleString();
+            return `<div class="alert ${n.read ? 'opacity-60' : ''}">
+                <div>
+                    <span class="badge badge-sm ${badge}">P${n.priority}</span>
+                    <strong>${n.title}</strong>
+                    <p class="text-sm">${n.message}</p>
+                    <span class="text-xs opacity-50">${time}</span>
+                </div>
+            </div>`;
+        }).join("");
+    } catch(e) { console.error("Failed to update notifications:", e); }
+}
+</script>
+{% endblock %}

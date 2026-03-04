@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}Security — Cortex{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Security Console</h1>
+
+<!-- Permission tiers reference -->
+<div class="mb-6" id="permission-tiers">
+    <h2 class="text-lg font-semibold mb-2">Permission Tiers</h2>
+    <div class="flex gap-2 flex-wrap">
+        <div class="badge badge-success gap-1">Tier 0 — Info</div>
+        <div class="badge badge-info gap-1">Tier 1 — Low</div>
+        <div class="badge badge-warning gap-1">Tier 2 — Medium</div>
+        <div class="badge badge-error gap-1">Tier 3 — Danger</div>
+    </div>
+</div>
+
+<!-- Audit log filters -->
+<div class="flex gap-4 mb-4 items-end" id="audit-filters">
+    <div class="form-control">
+        <label class="label"><span class="label-text">Action Type</span></label>
+        <select id="filter-action-type" class="select select-bordered select-sm"
+                onchange="loadAuditLog()">
+            <option value="">All</option>
+            <option value="tool_call">Tool Calls</option>
+        </select>
+    </div>
+    <button class="btn btn-sm btn-outline" onclick="loadAuditLog()">Refresh</button>
+</div>
+
+<!-- Audit log table -->
+<div class="overflow-x-auto" id="audit-log-container">
+    <table class="table table-zebra table-sm" id="audit-table">
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Action</th>
+                <th>Tier</th>
+                <th>Source</th>
+                <th>Approval</th>
+                <th>Result</th>
+                <th>Duration</th>
+            </tr>
+        </thead>
+        <tbody id="audit-body">
+            <tr><td colspan="7" class="text-center text-base-content/50">Loading...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- Pagination -->
+<div class="flex justify-center gap-2 mt-4" id="audit-pagination">
+    <button class="btn btn-sm" id="prev-page" onclick="prevPage()" disabled>Previous</button>
+    <span class="btn btn-sm btn-ghost" id="page-info">Page 1</span>
+    <button class="btn btn-sm" id="next-page" onclick="nextPage()">Next</button>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentOffset = 0;
+const pageSize = 50;
+let totalEntries = 0;
+
+function loadAuditLog() {
+    const actionType = document.getElementById("filter-action-type").value;
+    let url = `/api/security/audit?limit=${pageSize}&offset=${currentOffset}`;
+    if (actionType) url += `&action_type=${actionType}`;
+
+    fetch(url).then(r => r.json()).then(data => {
+        totalEntries = data.total;
+        const body = document.getElementById("audit-body");
+        if (data.entries.length === 0) {
+            body.innerHTML = '<tr><td colspan="7" class="text-center text-base-content/50">No entries</td></tr>';
+        } else {
+            body.innerHTML = data.entries.map(e => {
+                const time = new Date(e.timestamp * 1000).toLocaleString();
+                const tierClass = ["badge-success","badge-info","badge-warning","badge-error"][e.permission_tier] || "";
+                const resultClass = e.result === "success" ? "text-success" : e.result === "denied" ? "text-warning" : "text-error";
+                return `<tr>
+                    <td class="text-xs">${time}</td>
+                    <td>${e.action_id || e.action_type}</td>
+                    <td><span class="badge badge-xs ${tierClass}">${e.permission_tier}</span></td>
+                    <td>${e.source}</td>
+                    <td>${e.approval_status}</td>
+                    <td class="${resultClass}">${e.result}</td>
+                    <td>${e.duration_ms}ms</td>
+                </tr>`;
+            }).join("");
+        }
+        updatePagination();
+    });
+}
+
+function updatePagination() {
+    const page = Math.floor(currentOffset / pageSize) + 1;
+    const totalPages = Math.max(1, Math.ceil(totalEntries / pageSize));
+    document.getElementById("page-info").textContent = `Page ${page} of ${totalPages}`;
+    document.getElementById("prev-page").disabled = currentOffset === 0;
+    document.getElementById("next-page").disabled = currentOffset + pageSize >= totalEntries;
+}
+
+function prevPage() { currentOffset = Math.max(0, currentOffset - pageSize); loadAuditLog(); }
+function nextPage() { currentOffset += pageSize; loadAuditLog(); }
+
+document.addEventListener("DOMContentLoaded", loadAuditLog);
+</script>
+{% endblock %}

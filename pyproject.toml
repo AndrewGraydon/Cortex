@@ -25,6 +25,11 @@ dependencies = [
     "httpx>=0.25.0",
     # CLI
     "click>=8.1.0",
+    # Web UI
+    "jinja2>=3.1.0",
+    "python-multipart>=0.0.6",
+    "bcrypt>=4.0.0",
+    "itsdangerous>=2.1.0",
     # Utilities
     "pyyaml>=6.0",
     "pydantic>=2.5.0",
@@ -70,7 +75,7 @@ python_version = "3.11"
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["sounddevice.*", "zmq.*", "axengine.*"]
+module = ["sounddevice.*", "zmq.*", "axengine.*", "bcrypt.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

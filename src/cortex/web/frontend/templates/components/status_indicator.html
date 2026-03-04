@@ -1,0 +1,11 @@
+<div
+    id="status-indicator"
+    hx-get="/api/health"
+    hx-trigger="load, every 10s"
+    hx-swap="none"
+    hx-on::after-request="updateStatusDot(event)"
+    class="flex items-center gap-2"
+>
+    <div id="status-dot" class="w-3 h-3 rounded-full bg-gray-400 status-dot"></div>
+    <span id="status-text" class="text-xs hidden md:inline">checking...</span>
+</div>

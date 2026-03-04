@@ -222,6 +222,18 @@ class HealthConfig(BaseModel):
     memory_poll_interval: int = 30
 
 
+# --- Web Config ---
+
+
+class WebConfig(BaseModel):
+    enabled: bool = True
+    host: str = "0.0.0.0"
+    port: int = 8000
+    session_timeout_local: int = 3600
+    session_timeout_remote: int = 1800
+    password_hash: str = ""
+
+
 # --- System Config ---
 
 
@@ -249,6 +261,7 @@ class CortexConfig(BaseModel):
     scheduling: SchedulingConfig = Field(default_factory=SchedulingConfig)
     notifications: NotificationConfig = Field(default_factory=NotificationConfig)
     health: HealthConfig = Field(default_factory=HealthConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
 
 
 # --- Config search paths (in priority order) ---

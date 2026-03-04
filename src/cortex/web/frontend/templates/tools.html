@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}Tools — Cortex{% endblock %}
+
+{% block content %}
+<div class="flex justify-between items-center mb-6">
+    <h1 class="text-2xl font-bold">Tools</h1>
+    <button class="btn btn-sm btn-outline"
+            hx-post="/api/tools/reload"
+            hx-swap="none"
+            hx-on::after-request="loadTools()">
+        Reload
+    </button>
+</div>
+
+<!-- Search -->
+<div class="form-control mb-4">
+    <input type="text" id="tool-search" placeholder="Search tools..."
+           class="input input-bordered w-full max-w-sm"
+           oninput="filterTools(this.value)" />
+</div>
+
+<!-- Tool list -->
+<div id="tools-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"
+     hx-get="/api/tools"
+     hx-trigger="load"
+     hx-swap="none"
+     hx-on::after-request="renderTools(event)">
+    <p class="text-base-content/50">Loading tools...</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allTools = [];
+
+function renderTools(event) {
+    try {
+        const data = JSON.parse(event.detail.xhr.responseText);
+        allTools = data.tools || [];
+        displayTools(allTools);
+    } catch(e) { console.error("Failed to load tools:", e); }
+}
+
+function displayTools(tools) {
+    const list = document.getElementById("tools-list");
+    if (tools.length === 0) {
+        list.innerHTML = '<p class="text-base-content/50 col-span-2">No tools found</p>';
+        return;
+    }
+    list.innerHTML = tools.map(t => {
+        const tierBadge = ["badge-success", "badge-info", "badge-warning", "badge-error"][t.tier] || "badge-ghost";
+        const typeBadge = t.type === "script" ? "badge-secondary" : "badge-primary";
+        const status = t.enabled ? "" : " opacity-50";
+        return `<div class="card bg-base-100 shadow-sm${status}">
+            <div class="card-body p-4">
+                <h3 class="card-title text-base">
+                    ${t.name}
+                    <span class="badge badge-sm ${tierBadge}">Tier ${t.tier}</span>
+                    <span class="badge badge-sm ${typeBadge}">${t.type}</span>
+                </h3>
+                <p class="text-sm">${t.description}</p>
+                ${t.keywords ? '<div class="flex gap-1 flex-wrap mt-1">' + t.keywords.map(k => '<span class="badge badge-xs badge-outline">' + k + '</span>').join('') + '</div>' : ''}
+            </div>
+        </div>`;
+    }).join("");
+}
+
+function filterTools(query) {
+    const q = query.toLowerCase();
+    const filtered = allTools.filter(t =>
+        t.name.toLowerCase().includes(q) ||
+        t.description.toLowerCase().includes(q) ||
+        (t.keywords || []).some(k => k.toLowerCase().includes(q))
+    );
+    displayTools(filtered);
+}
+
+function loadTools() {
+    fetch("/api/tools").then(r => r.json()).then(data => {
+        allTools = data.tools || [];
+        displayTools(allTools);
+    });
+}
+</script>
+{% endblock %}

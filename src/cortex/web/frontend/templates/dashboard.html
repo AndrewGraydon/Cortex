@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — Cortex{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Dashboard</h1>
+
+<!-- Health stats -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6"
+     hx-get="/api/dashboard/health"
+     hx-trigger="load, every 10s"
+     hx-swap="none"
+     hx-on::after-request="updateHealthCards(event)">
+    <div class="stat bg-base-100 rounded-box shadow">
+        <div class="stat-title">CPU</div>
+        <div class="stat-value text-lg" id="cpu-load">--</div>
+        <div class="stat-desc" id="cpu-status">checking...</div>
+    </div>
+    <div class="stat bg-base-100 rounded-box shadow">
+        <div class="stat-title">Memory</div>
+        <div class="stat-value text-lg" id="memory-pct">--</div>
+        <div class="stat-desc" id="memory-status">checking...</div>
+    </div>
+    <div class="stat bg-base-100 rounded-box shadow">
+        <div class="stat-title">Storage</div>
+        <div class="stat-value text-lg" id="storage-pct">--</div>
+        <div class="stat-desc" id="storage-status">checking...</div>
+    </div>
+</div>
+
+<!-- Uptime and overall status -->
+<div class="stats shadow mb-6 w-full">
+    <div class="stat">
+        <div class="stat-title">System Status</div>
+        <div class="stat-value text-lg" id="overall-status">--</div>
+    </div>
+    <div class="stat">
+        <div class="stat-title">Uptime</div>
+        <div class="stat-value text-lg" id="uptime">--</div>
+    </div>
+    <div class="stat">
+        <div class="stat-title">Models Loaded</div>
+        <div class="stat-value text-lg" id="models-count">--</div>
+    </div>
+</div>
+
+<!-- Active timers -->
+<h2 class="text-xl font-bold mb-3">Active Timers</h2>
+<div id="timers-container" class="mb-6"
+     hx-get="/api/dashboard/timers"
+     hx-trigger="load, every 5s"
+     hx-swap="none"
+     hx-on::after-request="updateTimers(event)">
+    <div id="timers-list" class="space-y-2">
+        <p class="text-base-content/50">No active timers</p>
+    </div>
+</div>
+
+<!-- Recent actions -->
+<h2 class="text-xl font-bold mb-3">Recent Actions</h2>
+<div id="recent-container"
+     hx-get="/api/dashboard/recent"
+     hx-trigger="load, every 15s"
+     hx-swap="none"
+     hx-on::after-request="updateRecent(event)">
+    <div class="overflow-x-auto">
+        <table class="table table-sm" id="recent-table">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Action</th>
+                    <th>Result</th>
+                    <th>Source</th>
+                    <th>Duration</th>
+                </tr>
+            </thead>
+            <tbody id="recent-body">
+                <tr><td colspan="5" class="text-center text-base-content/50">Loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateHealthCards(event) {
+    try {
+        const data = JSON.parse(event.detail.xhr.responseText);
+        const c = data.components || {};
+
+        // CPU
+        const cpu = c.cpu || {};
+        document.getElementById("cpu-load").textContent = (cpu.load_1m || 0).toFixed(2);
+        document.getElementById("cpu-status").textContent = cpu.status || "unknown";
+
+        // Memory
+        const mem = c.memory || {};
+        document.getElementById("memory-pct").textContent = (mem.used_pct || 0).toFixed(1) + "%";
+        document.getElementById("memory-status").textContent = mem.status || "unknown";
+
+        // Storage
+        const stor = c.storage || {};
+        document.getElementById("storage-pct").textContent = (stor.used_pct || 0).toFixed(1) + "%";
+        document.getElementById("storage-status").textContent = stor.status || "unknown";
+
+        // Overall
+        document.getElementById("overall-status").textContent = data.status || "unknown";
+        document.getElementById("uptime").textContent = formatUptime(data.uptime_seconds || 0);
+        document.getElementById("models-count").textContent = (data.models_loaded || []).length;
+    } catch(e) { console.error("Failed to update health cards:", e); }
+}
+
+function updateTimers(event) {
+    try {
+        const data = JSON.parse(event.detail.xhr.responseText);
+        const list = document.getElementById("timers-list");
+        if (!data.timers || data.timers.length === 0) {
+            list.innerHTML = '<p class="text-base-content/50">No active timers</p>';
+            return;
+        }
+        list.innerHTML = data.timers.map(t =>
+            `<div class="alert">
+                <span>${t.label || "Timer " + t.id}</span>
+                <span class="font-mono">${formatDuration(t.remaining_seconds)}</span>
+            </div>`
+        ).join("");
+    } catch(e) { console.error("Failed to update timers:", e); }
+}
+
+function updateRecent(event) {
+    try {
+        const data = JSON.parse(event.detail.xhr.responseText);
+        const body = document.getElementById("recent-body");
+        if (!data.actions || data.actions.length === 0) {
+            body.innerHTML = '<tr><td colspan="5" class="text-center text-base-content/50">No recent actions</td></tr>';
+            return;
+        }
+        body.innerHTML = data.actions.map(a =>
+            `<tr>
+                <td>${new Date(a.timestamp * 1000).toLocaleTimeString()}</td>
+                <td>${a.action_id || a.action_type}</td>
+                <td><span class="badge badge-sm ${a.result === 'success' ? 'badge-success' : 'badge-error'}">${a.result}</span></td>
+                <td>${a.source}</td>
+                <td>${a.duration_ms}ms</td>
+            </tr>`
+        ).join("");
+    } catch(e) { console.error("Failed to update recent:", e); }
+}
+
+function formatUptime(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h > 0) return h + "h " + m + "m";
+    return m + "m";
+}
+
+function formatDuration(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return m + ":" + s.toString().padStart(2, "0");
+}
+</script>
+{% endblock %}
