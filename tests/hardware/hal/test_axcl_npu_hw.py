@@ -2,11 +2,17 @@
 
 Run with: make test-hw
 Or: pytest -m hardware tests/hardware/
+
+Note: The axengine NPU engine (axclrtEngineInit) is process-global and can only
+be initialized once. The npu fixture is module-scoped so all tests share one
+AxclNpuService instance, avoiding re-initialization failures.
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -23,9 +29,13 @@ KOKORO_DIR = MODELS_DIR / "Kokoro"
 pytestmark = pytest.mark.hardware
 
 
-@pytest.fixture
-async def npu() -> AxclNpuService:
-    """Create AxclNpuService with default config."""
+@pytest.fixture(scope="module")
+async def npu() -> AsyncGenerator[AxclNpuService, Any]:
+    """Module-scoped NPU service — avoids axclrtEngineInit re-initialization.
+
+    All tests share one AxclNpuService instance. Models are cleaned up
+    between tests by the _cleanup_models autouse fixture.
+    """
     service = AxclNpuService(
         config={
             "sensevoice": {"memory_mb": 251},
@@ -39,6 +49,17 @@ async def npu() -> AxclNpuService:
     )
     yield service
     await service.shutdown()
+
+
+@pytest.fixture(autouse=True)
+async def _cleanup_models(npu: AxclNpuService) -> AsyncGenerator[None, Any]:
+    """Unload all models after each test to avoid state leaking between tests."""
+    yield
+    # Unload any models left loaded by the test
+    for model_id in list(npu._runners.keys()):
+        handle = npu._handles.get(model_id)
+        if handle:
+            await npu.unload_model(handle)
 
 
 class TestASRHardware:

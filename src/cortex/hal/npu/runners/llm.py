@@ -237,7 +237,26 @@ class LLMRunner:
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
     async def _start_tokenizer(self, model_path: Path, venv_python: str) -> None:
-        """Start tokenizer HTTP server subprocess."""
+        """Start tokenizer HTTP server subprocess, or detect existing one.
+
+        If a tokenizer is already running on the configured port (e.g. started
+        manually via nohup), skip subprocess creation and reuse it.
+        """
+        tokenizer_url = f"http://127.0.0.1:{self._tokenizer_port}/get_uid"
+
+        # Probe for an already-running tokenizer server
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(tokenizer_url, timeout=2.0)
+                if resp.status_code < 500:
+                    logger.info(
+                        "Tokenizer already running on port %d, reusing",
+                        self._tokenizer_port,
+                    )
+                    return
+        except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException):
+            pass  # Not running, start a new one
+
         tokenizer_script = model_path / "qwen3_tokenizer_uid.py"
         if not tokenizer_script.exists():
             msg = f"Tokenizer script not found: {tokenizer_script}"
@@ -261,7 +280,7 @@ class LLMRunner:
         )
 
         await self._wait_for_http(
-            f"http://127.0.0.1:{self._tokenizer_port}/get_uid",
+            tokenizer_url,
             timeout=30.0,
             name="tokenizer",
         )
