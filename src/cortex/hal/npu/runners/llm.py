@@ -3,16 +3,21 @@
 Architecture (DD-046):
   Cortex LLMRunner
     ├── Subprocess: python3 qwen3_tokenizer_uid.py (port 12345)
-    └── Subprocess: ./main_api_axcl_aarch64 (port 8000, OpenAI-compat HTTP)
+    └── Subprocess: ./main_api_axcl_aarch64 (port 8000, ax-llm HTTP API)
 
 The C++ binary handles all NPU operations. We communicate via HTTP.
 The tokenizer server is required by the C++ binary (internal RPC).
+
+API format (old ax-llm binary, pre-OpenAI-compat):
+  POST /api/chat     — synchronous chat, returns {"done":true,"message":"..."}
+  POST /api/generate — async generation, poll via GET /api/generate_provider
+  POST /api/reset    — reset conversation context
+  POST /api/stop     — stop in-progress generation
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -28,6 +33,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_API_PORT = 8000
 DEFAULT_TOKENIZER_PORT = 12345
 
+# Streaming poll interval (seconds)
+STREAM_POLL_INTERVAL = 0.15
+
 # Model-specific constants
 QWEN3_AXMODEL_NUM = 28
 QWEN3_TOKENS_EMBED_NUM = 151936
@@ -39,9 +47,11 @@ class LLMRunner:
 
     Starts two subprocesses:
     1. Tokenizer HTTP server (Python, port 12345)
-    2. LLM API server (C++, port 8000, OpenAI-compatible)
+    2. LLM API server (C++, port 8000)
 
-    Communication is via HTTP. Streaming uses SSE.
+    Communication is via HTTP.
+    Non-streaming: POST /api/chat (blocks until done).
+    Streaming: POST /api/generate + poll GET /api/generate_provider.
     """
 
     def __init__(self) -> None:
@@ -124,76 +134,69 @@ class LLMRunner:
         self._memory_mb = 0
 
     async def infer(self, inputs: InferenceInputs) -> InferenceOutputs:
-        """Send prompt, get full response."""
+        """Send prompt, get full response via POST /api/chat."""
         self._check_loaded()
         assert self._client is not None
 
         prompt = str(inputs.data) if inputs.data is not None else ""
-        body = self._build_request(prompt, inputs.params, stream=False)
+        body = self._build_chat_request(prompt, inputs.params)
 
-        resp = await self._client.post("/v1/chat/completions", json=body)
+        resp = await self._client.post("/api/chat", json=body)
         resp.raise_for_status()
         data = resp.json()
 
-        choice = data["choices"][0]
-        content = choice["message"]["content"]
+        content = data.get("message", "")
         content = self._strip_think_tags(content)
 
         return InferenceOutputs(
             data=content,
             metadata={
-                "finish_reason": choice.get("finish_reason", "stop"),
-                "usage": data.get("usage", {}),
-                "model": data.get("model", ""),
+                "finish_reason": "stop" if data.get("done") else "length",
             },
         )
 
     async def infer_stream(self, inputs: InferenceInputs) -> AsyncIterator[InferenceOutputs]:
-        """Stream tokens via SSE."""
+        """Stream tokens via POST /api/generate + polling /api/generate_provider."""
         self._check_loaded()
         assert self._client is not None
 
         prompt = str(inputs.data) if inputs.data is not None else ""
-        body = self._build_request(prompt, inputs.params, stream=True)
+        body = self._build_generate_request(prompt, inputs.params)
 
-        async with self._client.stream("POST", "/v1/chat/completions", json=body) as resp:
-            resp.raise_for_status()
-            buffer = ""
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                payload = line[6:]
-                if payload == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
+        # Start async generation
+        resp = await self._client.post("/api/generate", json=body)
+        resp.raise_for_status()
 
-                delta = chunk["choices"][0].get("delta", {})
-                content = delta.get("content", "")
-                finish = chunk["choices"][0].get("finish_reason")
+        # Poll for incremental deltas
+        buffer = ""
+        while True:
+            await asyncio.sleep(STREAM_POLL_INTERVAL)
+            poll_resp = await self._client.get("/api/generate_provider")
+            poll_resp.raise_for_status()
+            poll_data = poll_resp.json()
 
-                if content:
-                    # Strip think tags from streaming output
-                    buffer += content
-                    clean = self._strip_think_tags(buffer)
-                    if clean != self._strip_think_tags(buffer[: -len(content)]):
-                        new_text = clean[len(self._strip_think_tags(buffer[: -len(content)])) :]
-                        if new_text:
-                            yield InferenceOutputs(
-                                data=new_text,
-                                metadata={
-                                    "is_final": finish == "stop",
-                                    "finish_reason": finish,
-                                },
-                            )
+            delta = poll_data.get("response", "")
+            done = poll_data.get("done", False)
 
-                if finish == "stop":
-                    break
+            if delta:
+                buffer += delta
+                clean = self._strip_think_tags(buffer)
+                prev_clean = self._strip_think_tags(buffer[: -len(delta)])
+                new_text = clean[len(prev_clean) :]
+                if new_text:
+                    yield InferenceOutputs(
+                        data=new_text,
+                        metadata={
+                            "is_final": done,
+                            "finish_reason": "stop" if done else None,
+                        },
+                    )
+
+            if done:
+                break
 
     async def reset_context(self, system_prompt: str | None = None) -> None:
-        """Reset LLM KV cache context."""
+        """Reset LLM KV cache context via POST /api/reset."""
         self._check_loaded()
         assert self._client is not None
 
@@ -201,7 +204,7 @@ class LLMRunner:
         if system_prompt:
             body["system_prompt"] = system_prompt
 
-        resp = await self._client.post("/v1/reset", json=body)
+        resp = await self._client.post("/api/reset", json=body)
         resp.raise_for_status()
         logger.info("LLM context reset")
 
@@ -212,22 +215,37 @@ class LLMRunner:
             msg = "LLM not loaded"
             raise RuntimeError(msg)
 
-    def _build_request(
-        self, prompt: str, params: dict[str, Any], *, stream: bool
+    def _build_chat_request(
+        self, prompt: str, params: dict[str, Any]
     ) -> dict[str, Any]:
-        """Build OpenAI-compatible chat completion request.
-
-        Note: The AXCL binary uses a single message object, not an array.
-        """
-        return {
-            "model": "AXERA-TECH/Qwen3-1.7B",
-            "messages": {"role": "user", "content": prompt},
-            "stream": stream,
-            "temperature": params.get("temperature", 0.7),
-            "top-p": params.get("top_p", 0.9),
-            "top-k": params.get("top_k", 40),
-            "repetition_penalty": params.get("repetition_penalty", 1.1),
+        """Build request for POST /api/chat (synchronous, messages array)."""
+        body: dict[str, Any] = {
+            "messages": [{"role": "user", "content": prompt}],
         }
+        self._add_sampling_params(body, params)
+        return body
+
+    def _build_generate_request(
+        self, prompt: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Build request for POST /api/generate (async, prompt string)."""
+        body: dict[str, Any] = {
+            "prompt": prompt,
+        }
+        self._add_sampling_params(body, params)
+        return body
+
+    @staticmethod
+    def _add_sampling_params(body: dict[str, Any], params: dict[str, Any]) -> None:
+        """Add sampling parameters to request body."""
+        if "temperature" in params:
+            body["temperature"] = params["temperature"]
+        if "top_p" in params:
+            body["top-p"] = params["top_p"]
+        if "top_k" in params:
+            body["top-k"] = params["top_k"]
+        if "repetition_penalty" in params:
+            body["repetition_penalty"] = params["repetition_penalty"]
 
     @staticmethod
     def _strip_think_tags(text: str) -> str:
@@ -348,15 +366,17 @@ class LLMRunner:
             self._api_port,
         )
 
-        await self._wait_for_http(
-            f"http://127.0.0.1:{self._api_port}/v1/models",
+        # Health check: POST /api/reset returns {"status":"ok"} when ready.
+        # Use POST (not GET) because the old binary has no GET health endpoint.
+        await self._wait_for_ready(
+            f"http://127.0.0.1:{self._api_port}/api/reset",
             timeout=120.0,
             name="LLM API",
         )
 
     @staticmethod
     async def _wait_for_http(url: str, timeout: float, name: str) -> None:
-        """Poll HTTP endpoint until it responds or timeout."""
+        """Poll HTTP GET endpoint until it responds or timeout."""
         deadline = asyncio.get_event_loop().time() + timeout
         async with httpx.AsyncClient() as client:
             while asyncio.get_event_loop().time() < deadline:
@@ -368,6 +388,36 @@ class LLMRunner:
                 except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException):
                     pass
                 await asyncio.sleep(0.5)
+
+        msg = f"{name} failed to start within {timeout}s at {url}"
+        raise TimeoutError(msg)
+
+    @staticmethod
+    async def _wait_for_ready(url: str, timeout: float, name: str) -> None:
+        """Poll HTTP POST endpoint until it responds or timeout.
+
+        The old ax-llm binary has no GET health endpoint; POST /api/reset
+        returns {"status":"ok"} when the model is loaded and ready.
+        It returns {"error":"Model initing"} while still loading.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        async with httpx.AsyncClient() as client:
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    resp = await client.post(
+                        url, json={}, timeout=2.0,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    if resp.status_code < 500:
+                        data = resp.json()
+                        if data.get("status") == "ok":
+                            logger.info("%s ready at %s", name, url)
+                            return
+                        # "Model initing" — still loading, keep polling
+                        logger.debug("%s still loading: %s", name, data)
+                except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException):
+                    pass
+                await asyncio.sleep(1.0)
 
         msg = f"{name} failed to start within {timeout}s at {url}"
         raise TimeoutError(msg)
