@@ -19,7 +19,8 @@
 set -euo pipefail
 
 # Find the installed axengine _axclrt.py
-AXCLRT=$(python3 -c "import axengine._axclrt as m; print(m.__file__)" 2>/dev/null || true)
+# axengine prints [INFO] to stdout on import, so capture only the last line
+AXCLRT=$(python3 -c "import axengine._axclrt as m; print(m.__file__)" 2>/dev/null | tail -1 || true)
 
 if [ -z "$AXCLRT" ]; then
     echo "ERROR: axengine not installed or _axclrt.py not found"
