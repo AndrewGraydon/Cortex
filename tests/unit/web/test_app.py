@@ -62,9 +62,7 @@ class TestAppCreation:
 
     def test_app_mounts_static_files(self, config: CortexConfig) -> None:
         application = create_app(config=config)
-        route_names = [
-            getattr(route, "name", None) for route in application.routes
-        ]
+        route_names = [getattr(route, "name", None) for route in application.routes]
         assert "static" in route_names
 
 
@@ -284,9 +282,7 @@ class TestWebConfig:
         assert config.web.password_hash == ""
 
     def test_web_config_custom_values(self) -> None:
-        config = CortexConfig(
-            web=WebConfig(port=9000, host="127.0.0.1", enabled=False)
-        )
+        config = CortexConfig(web=WebConfig(port=9000, host="127.0.0.1", enabled=False))
         assert config.web.port == 9000
         assert config.web.host == "127.0.0.1"
         assert config.web.enabled is False

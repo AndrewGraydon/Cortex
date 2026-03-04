@@ -22,16 +22,18 @@ def tools_dir(tmp_path: Path) -> Path:
     greeting_dir.mkdir()
     (greeting_dir / "scripts").mkdir()
     (greeting_dir / "TOOL.yaml").write_text(
-        yaml.dump({
-            "name": "greeting",
-            "description": "Say hello",
-            "permission_tier": 0,
-            "entry_point": "scripts/run.py",
-        })
+        yaml.dump(
+            {
+                "name": "greeting",
+                "description": "Say hello",
+                "permission_tier": 0,
+                "entry_point": "scripts/run.py",
+            }
+        )
     )
     (greeting_dir / "scripts" / "run.py").write_text(
-        'import json, sys\n'
-        'data = json.loads(sys.stdin.read())\n'
+        "import json, sys\n"
+        "data = json.loads(sys.stdin.read())\n"
         'json.dump({"display_text": "Hello!"}, sys.stdout)\n'
     )
 
@@ -40,16 +42,17 @@ def tools_dir(tmp_path: Path) -> Path:
     timer_dir.mkdir()
     (timer_dir / "scripts").mkdir()
     (timer_dir / "TOOL.yaml").write_text(
-        yaml.dump({
-            "name": "timer",
-            "description": "Set a timer",
-            "permission_tier": 1,
-            "entry_point": "scripts/run.py",
-        })
+        yaml.dump(
+            {
+                "name": "timer",
+                "description": "Set a timer",
+                "permission_tier": 1,
+                "entry_point": "scripts/run.py",
+            }
+        )
     )
     (timer_dir / "scripts" / "run.py").write_text(
-        'import json, sys\n'
-        'json.dump({"display_text": "Timer set"}, sys.stdout)\n'
+        'import json, sys\njson.dump({"display_text": "Timer set"}, sys.stdout)\n'
     )
 
     return tmp_path

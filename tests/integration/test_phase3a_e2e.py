@@ -90,17 +90,13 @@ def _login(client: TestClient) -> TestClient:
 class TestAuthenticationE2E:
     """Web UI accessible with bcrypt authentication."""
 
-    def test_unauthenticated_redirect(
-        self, auth_client: TestClient
-    ) -> None:
+    def test_unauthenticated_redirect(self, auth_client: TestClient) -> None:
         """Unauthenticated requests redirect to login."""
         response = auth_client.get("/", follow_redirects=False)
         assert response.status_code == 303
         assert "/login" in response.headers["location"]
 
-    def test_login_creates_session(
-        self, auth_client: TestClient
-    ) -> None:
+    def test_login_creates_session(self, auth_client: TestClient) -> None:
         """Correct password creates session cookie."""
         response = auth_client.post(
             "/login",
@@ -110,9 +106,7 @@ class TestAuthenticationE2E:
         assert response.status_code == 303
         assert SESSION_COOKIE_NAME in response.cookies
 
-    def test_wrong_password_rejected(
-        self, auth_client: TestClient
-    ) -> None:
+    def test_wrong_password_rejected(self, auth_client: TestClient) -> None:
         """Wrong password returns 401."""
         response = auth_client.post(
             "/login",
@@ -120,17 +114,13 @@ class TestAuthenticationE2E:
         )
         assert response.status_code == 401
 
-    def test_authenticated_access(
-        self, auth_client: TestClient
-    ) -> None:
+    def test_authenticated_access(self, auth_client: TestClient) -> None:
         """After login, all pages accessible."""
         _login(auth_client)
         response = auth_client.get("/")
         assert response.status_code == 200
 
-    def test_logout_clears_session(
-        self, auth_client: TestClient
-    ) -> None:
+    def test_logout_clears_session(self, auth_client: TestClient) -> None:
         """Logout clears session and redirects."""
         _login(auth_client)
         response = auth_client.post("/logout", follow_redirects=False)
@@ -145,16 +135,12 @@ class TestAuthenticationE2E:
 class TestChatE2E:
     """Chat interface supports conversation via WebSocket."""
 
-    def test_chat_page_renders(
-        self, no_auth_client: TestClient
-    ) -> None:
+    def test_chat_page_renders(self, no_auth_client: TestClient) -> None:
         response = no_auth_client.get("/chat")
         assert response.status_code == 200
         assert "chat" in response.text.lower()
 
-    def test_websocket_echo(
-        self, no_auth_client: TestClient
-    ) -> None:
+    def test_websocket_echo(self, no_auth_client: TestClient) -> None:
         """WebSocket echoes messages when no AgentProcessor configured."""
         import json
 
@@ -163,9 +149,7 @@ class TestChatE2E:
             response = ws.receive_text()
             assert "Hello from web" in response
 
-    def test_websocket_xss_escaped(
-        self, no_auth_client: TestClient
-    ) -> None:
+    def test_websocket_xss_escaped(self, no_auth_client: TestClient) -> None:
         """Script tags are escaped in chat responses."""
         import json
 
@@ -203,9 +187,7 @@ class TestAllPagesRender:
         assert response.status_code == 200
         assert "Dashboard" in response.text
 
-    def test_notifications_page(
-        self, no_auth_client: TestClient
-    ) -> None:
+    def test_notifications_page(self, no_auth_client: TestClient) -> None:
         response = no_auth_client.get("/notifications")
         assert response.status_code == 200
         assert "Notifications" in response.text
@@ -234,18 +216,14 @@ class TestAllPagesRender:
 class TestDashboardHealthE2E:
     """Dashboard shows health from HealthMonitor."""
 
-    def test_health_api_returns_data(
-        self, no_auth_client: TestClient
-    ) -> None:
+    def test_health_api_returns_data(self, no_auth_client: TestClient) -> None:
         response = no_auth_client.get("/api/dashboard/health")
         assert response.status_code == 200
         data = response.json()
         assert "status" in data
         assert "components" in data
 
-    def test_health_endpoint(
-        self, no_auth_client: TestClient
-    ) -> None:
+    def test_health_endpoint(self, no_auth_client: TestClient) -> None:
         response = no_auth_client.get("/api/health")
         assert response.status_code == 200
         data = response.json()
@@ -307,9 +285,7 @@ class TestAuditLogE2E:
 class TestToolManagerE2E:
     """Tool manager lists tools and supports reload."""
 
-    def test_tools_api_empty(
-        self, no_auth_client: TestClient
-    ) -> None:
+    def test_tools_api_empty(self, no_auth_client: TestClient) -> None:
         data = no_auth_client.get("/api/tools").json()
         assert data["tools"] == []
 
@@ -340,9 +316,7 @@ class TestToolManagerE2E:
 class TestSettingsE2E:
     """Settings page shows configuration sections."""
 
-    def test_all_config_sections(
-        self, no_auth_client: TestClient
-    ) -> None:
+    def test_all_config_sections(self, no_auth_client: TestClient) -> None:
         data = no_auth_client.get("/api/settings").json()
         settings = data["settings"]
         assert "system" in settings
@@ -353,9 +327,7 @@ class TestSettingsE2E:
         assert "web" in settings
         assert "health" in settings
 
-    def test_individual_section(
-        self, no_auth_client: TestClient
-    ) -> None:
+    def test_individual_section(self, no_auth_client: TestClient) -> None:
         data = no_auth_client.get("/api/settings/system").json()
         assert data["section"] == "system"
         assert "hostname" in data["data"]
@@ -417,8 +389,6 @@ class TestSecurityConsoleE2E:
 
             await audit.stop()
 
-    def test_permissions_endpoint(
-        self, no_auth_client: TestClient
-    ) -> None:
+    def test_permissions_endpoint(self, no_auth_client: TestClient) -> None:
         data = no_auth_client.get("/api/security/permissions").json()
         assert len(data["tiers"]) == 4

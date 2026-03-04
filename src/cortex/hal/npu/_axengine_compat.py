@@ -80,9 +80,7 @@ def patch() -> None:
 
         # --- FIX 1: Idempotent engine initialization ---
         if not _axclrt_mod._is_axclrt_engine_initialized:
-            vnpu_type = axclrt_cffi.cast(
-                "axclrtEngineVNpuKind", VNPUType.DISABLED.value
-            )
+            vnpu_type = axclrt_cffi.cast("axclrtEngineVNpuKind", VNPUType.DISABLED.value)
             ret = axclrt_lib.axclrtEngineInit(vnpu_type)
             if ret != 0:
                 vnpu = axclrt_cffi.new("axclrtEngineVNpuKind *")
@@ -103,9 +101,7 @@ def patch() -> None:
                     logger.warning("axclrtSetCurrentContext returned 0x%08x", ret)
 
         # Get SOC name
-        self.soc_name = axclrt_cffi.string(
-            axclrt_lib.axclrtGetSocName()
-        ).decode()
+        self.soc_name = axclrt_cffi.string(axclrt_lib.axclrtGetSocName()).decode()
 
         # Get or create thread context
         self._thread_context = axclrt_cffi.new("axclrtContext *")
@@ -129,6 +125,7 @@ def patch() -> None:
 
         # Get VNPU type
         from axengine._axclrt import _get_vnpu_type
+
         self._vnpu_type = _get_vnpu_type()
 
         # Load model

@@ -186,9 +186,7 @@ class TestWebSocketWithProcessor:
 class TestChatSessionManagement:
     """Tests for WebChatSession conversation tracking."""
 
-    def test_separate_websockets_have_separate_histories(
-        self, app_no_auth: TestClient
-    ) -> None:
+    def test_separate_websockets_have_separate_histories(self, app_no_auth: TestClient) -> None:
         with app_no_auth.websocket_connect("/ws/chat") as ws1:
             ws1.send_text(json.dumps({"message": "message from tab 1"}))
             ws1.receive_text()

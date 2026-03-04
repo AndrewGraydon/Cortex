@@ -143,9 +143,7 @@ class AuthService:
         if not self._db:
             return 0
         now = time.time()
-        cursor = await self._db.execute(
-            "DELETE FROM sessions WHERE expires_at < ?", (now,)
-        )
+        cursor = await self._db.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
         await self._db.commit()
         return cursor.rowcount
 

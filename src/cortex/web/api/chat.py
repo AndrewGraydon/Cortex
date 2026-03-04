@@ -90,9 +90,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
             if processor:
                 try:
-                    response = await processor.process(
-                        message, chat_session.voice_session
-                    )
+                    response = await processor.process(message, chat_session.voice_session)
                     reply = chat_session.process_response(response)
                 except Exception:
                     logger.exception("AgentProcessor error for session %s", session_id)

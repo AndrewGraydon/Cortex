@@ -16,13 +16,15 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 logger = logging.getLogger(__name__)
 
 # Paths that don't require authentication
-EXEMPT_PATHS = frozenset({
-    "/login",
-    "/logout",
-    "/api/health",
-    "/static",
-    "/favicon.ico",
-})
+EXEMPT_PATHS = frozenset(
+    {
+        "/login",
+        "/logout",
+        "/api/health",
+        "/static",
+        "/favicon.ico",
+    }
+)
 
 # HTTP methods that require CSRF validation
 CSRF_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
@@ -33,9 +35,7 @@ SESSION_COOKIE_NAME = "cortex_session"
 class AuthMiddleware(BaseHTTPMiddleware):
     """Validates session cookies and enforces authentication."""
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
 
         # Allow exempt paths

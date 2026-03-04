@@ -216,9 +216,7 @@ class LLMRunner:
             msg = "LLM not loaded"
             raise RuntimeError(msg)
 
-    def _build_chat_request(
-        self, prompt: str, params: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _build_chat_request(self, prompt: str, params: dict[str, Any]) -> dict[str, Any]:
         """Build request for POST /api/chat (synchronous, messages array)."""
         body: dict[str, Any] = {
             "messages": [{"role": "user", "content": prompt}],
@@ -226,9 +224,7 @@ class LLMRunner:
         self._add_sampling_params(body, params)
         return body
 
-    def _build_generate_request(
-        self, prompt: str, params: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _build_generate_request(self, prompt: str, params: dict[str, Any]) -> dict[str, Any]:
         """Build request for POST /api/generate (async, prompt string)."""
         body: dict[str, Any] = {
             "prompt": prompt,
@@ -410,7 +406,9 @@ class LLMRunner:
             while asyncio.get_event_loop().time() < deadline:
                 try:
                     resp = await client.post(
-                        reset_url, json={}, timeout=2.0,
+                        reset_url,
+                        json={},
+                        timeout=2.0,
                         headers={"Content-Type": "application/json"},
                     )
                     if resp.status_code < 500:
@@ -428,7 +426,9 @@ class LLMRunner:
 
             # Phase 2: Stop any in-flight generation from the reset
             with contextlib.suppress(
-                httpx.ConnectError, httpx.ReadError, httpx.TimeoutException,
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.TimeoutException,
             ):
                 await client.post(stop_url, timeout=2.0)
             await asyncio.sleep(1.0)
@@ -438,21 +438,29 @@ class LLMRunner:
                 try:
                     test_body = {"messages": [{"role": "user", "content": "ping"}]}
                     resp = await client.post(
-                        chat_url, json=test_body, timeout=10.0,
+                        chat_url,
+                        json=test_body,
+                        timeout=10.0,
                         headers={"Content-Type": "application/json"},
                     )
                     if resp.status_code == 200:
                         # Drain any pending generation
                         with contextlib.suppress(
-                            httpx.ConnectError, httpx.ReadError, httpx.TimeoutException,
+                            httpx.ConnectError,
+                            httpx.ReadError,
+                            httpx.TimeoutException,
                         ):
                             await client.post(stop_url, timeout=2.0)
                         # Reset context so the ping message isn't in history
                         with contextlib.suppress(
-                            httpx.ConnectError, httpx.ReadError, httpx.TimeoutException,
+                            httpx.ConnectError,
+                            httpx.ReadError,
+                            httpx.TimeoutException,
                         ):
                             await client.post(
-                                reset_url, json={}, timeout=2.0,
+                                reset_url,
+                                json={},
+                                timeout=2.0,
                                 headers={"Content-Type": "application/json"},
                             )
                         await asyncio.sleep(0.5)
@@ -460,7 +468,9 @@ class LLMRunner:
                         return
                     logger.debug(
                         "%s not idle yet (status %d): %s",
-                        name, resp.status_code, resp.text[:100],
+                        name,
+                        resp.status_code,
+                        resp.text[:100],
                     )
                 except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException):
                     pass

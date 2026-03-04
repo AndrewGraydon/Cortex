@@ -38,10 +38,10 @@ def tool_dir(tmp_path: Path) -> Path:
 
     # Create a working script
     (scripts_dir / "run.py").write_text(
-        'import json, sys\n'
-        'data = json.loads(sys.stdin.read())\n'
+        "import json, sys\n"
+        "data = json.loads(sys.stdin.read())\n"
         'result = {"display_text": f"Result: {data.get(\'input\', \'none\')}", "data": data}\n'
-        'json.dump(result, sys.stdout)\n'
+        "json.dump(result, sys.stdout)\n"
     )
 
     return tmp_path

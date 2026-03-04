@@ -151,9 +151,7 @@ class TestAuditAPI:
 
             with _make_app(audit_log=audit) as client:
                 # Get page 2 (offset=2, limit=2)
-                data = client.get(
-                    "/api/security/audit?limit=2&offset=2"
-                ).json()
+                data = client.get("/api/security/audit?limit=2&offset=2").json()
                 assert len(data["entries"]) == 2
                 assert data["total"] == 5
 

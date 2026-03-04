@@ -124,16 +124,18 @@ class TestToolsAPI:
             tool_dir = Path(td)
             (tool_dir / "scripts").mkdir()
             (tool_dir / "TOOL.yaml").write_text(
-                yaml.dump({
-                    "name": "test-script",
-                    "description": "A script tool",
-                    "permission_tier": 0,
-                    "triggers": [r"test\s+(\w+)"],
-                    "keywords": ["test"],
-                    "entry_point": "scripts/run.py",
-                })
+                yaml.dump(
+                    {
+                        "name": "test-script",
+                        "description": "A script tool",
+                        "permission_tier": 0,
+                        "triggers": [r"test\s+(\w+)"],
+                        "keywords": ["test"],
+                        "entry_point": "scripts/run.py",
+                    }
+                )
             )
-            run_code = 'import json,sys; json.dump({}, sys.stdout)\n'
+            run_code = "import json,sys; json.dump({}, sys.stdout)\n"
             (tool_dir / "scripts" / "run.py").write_text(run_code)
 
             tool = load_script_tool(tool_dir)
@@ -180,7 +182,7 @@ class TestToolReload:
             (tool_subdir / "TOOL.yaml").write_text(
                 yaml.dump({"name": "hello", "entry_point": "scripts/run.py"})
             )
-            run_code = 'import json,sys; json.dump({}, sys.stdout)\n'
+            run_code = "import json,sys; json.dump({}, sys.stdout)\n"
             (tool_subdir / "scripts" / "run.py").write_text(run_code)
 
             registry = ToolRegistry()
