@@ -173,13 +173,18 @@ class TestMultiModelHardware:
         assert len(status.models_loaded) == 2
 
     async def test_full_pipeline_cycle(self, npu: AxclNpuService) -> None:
-        """Full ASR → VLM → TTS cycle on real hardware."""
+        """Full ASR → VLM → TTS cycle on real hardware.
+
+        Loading order: VLM first — axllm serve must init AXCL before
+        pyaxengine models (ASR, TTS) to avoid device context conflicts.
+        """
         for d in [SENSEVOICE_DIR, QWEN3_VL_DIR, KOKORO_DIR]:
             if not d.exists():
                 pytest.skip(f"Model not found: {d}")
 
-        asr_handle = await npu.load_model("sensevoice", SENSEVOICE_DIR)
+        # VLM first: axllm serve must init AXCL before pyaxengine models
         llm_handle = await npu.load_model("qwen3-vl-2b", QWEN3_VL_DIR)
+        asr_handle = await npu.load_model("sensevoice", SENSEVOICE_DIR)
         tts_handle = await npu.load_model("kokoro", KOKORO_DIR)
 
         # ASR: transcribe silence (will get empty/short text)
