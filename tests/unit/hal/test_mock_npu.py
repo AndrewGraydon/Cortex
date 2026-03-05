@@ -30,7 +30,7 @@ class TestModelLifecycle:
         await mock_npu.load_model("kokoro", Path("/models/kokoro"))
         status = await mock_npu.get_status()
         assert len(status.models_loaded) == 3
-        assert status.memory_used_mb == 251 + 2560 + 232
+        assert status.memory_used_mb == 251 + 1771 + 232
 
     async def test_unload_model(self, mock_npu: MockNpuService) -> None:
         handle = await mock_npu.load_model("sensevoice", Path("/models/sensevoice"))
@@ -41,8 +41,8 @@ class TestModelLifecycle:
 
     async def test_oom_on_overload(self, mock_npu: MockNpuService) -> None:
         """Cannot load models exceeding total NPU memory."""
-        mock_npu.total_memory_mb = 4000
-        await mock_npu.load_model("qwen3-vl-2b", Path("/models/qwen3vl"))  # 2560MB
+        mock_npu.total_memory_mb = 3000
+        await mock_npu.load_model("qwen3-vl-2b", Path("/models/qwen3vl"))  # 1771MB
         with pytest.raises(RuntimeError, match="OOM"):
             await mock_npu.load_model("qwen3-0.6b", Path("/models/qwen06"))  # 2011MB > remaining
 
@@ -199,4 +199,4 @@ class TestFullPipelineCycle:
 
         # Verify memory
         status = await mock_npu.get_status()
-        assert status.memory_used_mb == 251 + 2560 + 232
+        assert status.memory_used_mb == 251 + 1771 + 232

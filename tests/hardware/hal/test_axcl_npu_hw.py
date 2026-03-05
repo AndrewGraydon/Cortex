@@ -40,7 +40,7 @@ async def npu() -> AsyncGenerator[AxclNpuService, Any]:
         config={
             "sensevoice": {"memory_mb": 251},
             "qwen3-vl-2b": {
-                "memory_mb": 2560,
+                "memory_mb": 1771,
                 "system_prompt": "You are Cortex, a helpful voice assistant.",
             },
             "kokoro": {"memory_mb": 232, "default_voice": "af_heart"},

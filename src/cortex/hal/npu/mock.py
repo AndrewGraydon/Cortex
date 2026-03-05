@@ -68,7 +68,7 @@ class MockNpuService:
     _model_sizes: dict[str, int] = field(
         default_factory=lambda: {
             "sensevoice": 251,
-            "qwen3-vl-2b": 2560,
+            "qwen3-vl-2b": 1771,
             "qwen3-1.7b": 3375,
             "qwen3-0.6b": 2011,
             "kokoro": 232,

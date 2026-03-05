@@ -35,14 +35,14 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 - **Other:** CLIP, 3D-Speaker-MT, LivePortrait, Stable Diffusion 1.5
 
 ### NPU Performance (Phase 0 measured on M.2 + Pi 5, AXCL v3.6.5)
-- Qwen3-0.6B (w8a16): **13.74 tok/s**, 2,011 MiB CMM (includes KV cache for 2,047 tokens)
-- Qwen3-1.7B (w8a16): **7.70 tok/s**, 3,375 MiB CMM, 2,047 max tokens
+- **Qwen3-VL-2B-GPTQ-Int4 (primary, DD-051): ~10 tok/s, 1,771 MiB CMM (measured via axcl-smi), 2,047 max tokens, text+vision**
+- Qwen3-0.6B (w8a16): **13.74 tok/s**, 2,011 MiB CMM (fallback for battery mode)
+- Qwen3-1.7B (w8a16): 7.70 tok/s, 3,375 MiB CMM (replaced by Qwen3-VL-2B)
 - Qwen3-4B (w8a16): 3.65 tok/s, ~6.2 GB CMM (691 MB remaining — can't co-reside), max 2,559 tokens (vendor benchmark)
-- Qwen3-VL-2B (w8a16): 7.80 tok/s, ~3.7 GB CMM (vendor benchmark)
 - SenseVoice RTF: **0.028** (36x faster than real-time), 251 MiB CMM
 - Kokoro-82M RTF: **0.115** (9x real-time, Python/pyaxengine path), 232 MiB CMM
-- FastVLM-0.5B: 792 MiB CMM, excellent image descriptions (Python/pyaxengine path)
-- **Total 4-model co-resident budget: ~4.95 GB of 7.04 GB (29.7% headroom)**
+- FastVLM-0.5B: 792 MiB CMM (replaced by Qwen3-VL-2B built-in vision)
+- **Total 3-model co-resident budget: 2,254 MiB of 7,040 MiB (32% used, 68% headroom)**
 - Source: [AXERA-TECH HuggingFace](https://huggingface.co/AXERA-TECH) (149+ models total), [M5Stack NPU Benchmark](https://docs.m5stack.com/en/guide/ai_accelerator/llm-8850/m5_llm_8850_npu_benchmark)
 
 ## Design Decisions Made
@@ -53,7 +53,7 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-002 | Local-first with optional secure external | Privacy + flexibility |
 | DD-003 | 4-tier permission model | Tiered autonomy: safe=auto, risky=approval |
 | DD-004 | General-purpose assistant | No premature domain optimization |
-| DD-005 | Qwen3-1.7B primary model | Measured Phase 0: 7.70 tok/s, 3,375 MiB CMM. Qwen3-4B rejected (3.65 tok/s, 6.2 GB fills NPU). See DD-029. |
+| DD-005 | Qwen3-VL-2B primary model (DD-051) | Measured: ~10 tok/s, 1,771 MiB CMM. Replaces Qwen3-1.7B + FastVLM-0.5B. See DD-051. |
 | DD-006 | FastAPI + HTMX for web UI | Lightweight, async, server-driven |
 | DD-007 | SQLite + sqlite-vec for memory | No separate DB server, vector search support |
 | DD-008 | ZeroMQ for IPC | Fast, brokerless, simple |
@@ -324,31 +324,31 @@ Cortex/
 
   **ax-llm upgrade path:** New `axllm serve` on GitHub (branch `axllm`) is OpenAI-compatible (`/v1/chat/completions`, SSE streaming, integrated tokenizer). No prebuilt binary — requires compile from source via `install.sh`. When upgraded, LLMRunner reverts to simpler OpenAI-compatible client, tokenizer server no longer needed. Provider interchangeability already architected via HAL protocol layer — different LLM providers are different runner implementations.
 
-- **Session 20 (2026-03-04):** Model migration: Qwen3-1.7B + FastVLM-0.5B → Qwen3-VL-2B-Instruct-GPTQ-Int4 (DD-051). Researched Qwen3.5 feasibility (rejected — Gated Delta Network not supported by AX8850). Found AXERA-TECH pre-compiled Qwen3-VL-2B: 14.1 tok/s (1.8x faster), 2,560 MiB (1,607 MiB savings), built-in vision, OpenAI-compat API via `axllm serve`. Six-milestone migration:
+- **Session 20 (2026-03-04):** Model migration: Qwen3-1.7B + FastVLM-0.5B → Qwen3-VL-2B-Instruct-GPTQ-Int4 (DD-051). Researched Qwen3.5 feasibility (rejected — Gated Delta Network not supported by AX8850). Six-milestone migration completed including hardware validation:
 
   **M1: VLM Runner rewrite** — New `runners/vlm.py`: single `axllm serve` subprocess, OpenAI `/v1/chat/completions`, SSE streaming with incremental think-tag stripping (`_safe_clean()` holds back incomplete `<think>` blocks), binary discovery, vision support via `image_base64` params. 30 unit tests.
 
-  **M2: NPU service updates** — `axcl.py`: Added `"qwen3-vl": "vlm"` to MODEL_RUNNER_MAP (before "qwen3-1.7b" for correct substring matching), `reset_llm_context()` handles VLMRunner. `mock.py`: Added "qwen3-vl-2b" model size (2560), classify VLM before LLM, route VLM through LLM mock paths.
+  **M2: NPU service updates** — `axcl.py`: Added `"qwen3-vl": "vlm"` to MODEL_RUNNER_MAP (before "qwen3-1.7b" for correct substring matching), `reset_llm_context()` handles VLMRunner. `mock.py`: Added "qwen3-vl-2b" model size (1771 measured), classify VLM before LLM, route VLM through LLM mock paths.
 
   **M3: Core service + config** — `service.py`: model loading uses "qwen3-vl-2b" / "Qwen3-VL-2B". `cortex.yaml.template`: reasoning profiles updated, 3 vision profiles consolidated to 1.
 
-  **M4: Test suite** — All test files updated (qwen3-1.7b → qwen3-vl-2b, 3375→2560 memory). 765 tests passing (736 + 29 new VLM runner tests). Lint + mypy clean.
+  **M4: Test suite** — All test files updated (qwen3-1.7b → qwen3-vl-2b, memory values updated to measured 1771). 765 tests passing (736 + 29 new VLM runner tests). Lint + mypy clean.
 
-  **M5: Hardware testing** — Test file updated for Qwen3-VL-2B (QWEN3_VL_DIR, no venv_python, think-tag test). Needs Pi deployment: download model + axllm binary.
+  **M5: Hardware validation (COMPLETE)** — Downloaded Qwen3-VL-2B (4.1 GB, 79 files). Compiled `axllm` binary from source on Pi (`axllm` branch of AXERA-TECH/ax-llm, cmake with BUILD_AXCL=ON). Created `config.json` with `tokenizer_type: "Qwen3VL"`. Measured: **1,771 MiB CMM** (via axcl-smi), **~10 tok/s**, max_token_len 2047, ~45s model load, 50°C under load. Default port 8080. OpenAI API verified: `/v1/models` returns model list, `/v1/chat/completions` returns correct responses, SSE streaming works. Key gotchas: no pre-built binary, tokenizer_type must be "Qwen3VL" (not "tiktoken"), config.json required in model dir.
 
-  **M6: Documentation** — DD-051 added to scope doc (v0.1.22). CLAUDE.md, README.md, MEMORY.md, project-context.md updated. Memory budget: 3,043 MiB (43% of 7,040 MiB).
+  **M6: Documentation** — DD-051 updated with measured values (scope doc v0.1.23). Phase 0 guide: full build instructions added (§0.8). All docs updated with 1,771 MiB measured value.
 
-  **New memory budget:** SenseVoice (251) + Qwen3-VL-2B (2,560) + Kokoro (232) = 3,043 MiB — 56.8% headroom (was 29.7%). Old LLMRunner kept for Qwen3-0.6B backward compat.
+  **Measured memory budget:** SenseVoice (251) + Qwen3-VL-2B (**1,771 measured**) + Kokoro (232) = **2,254 MiB — 68% headroom** (was 29.7% with old 4-model stack). Old LLMRunner kept for Qwen3-0.6B backward compat.
 
 ### NEXT SESSION — Resume Here
-**Topic:** Hardware validation of Qwen3-VL-2B on Pi, then Phase 3b.
-- **Pi M5:** Download `AXERA-TECH/Qwen3-VL-2B-Instruct-GPTQ-Int4`, get `axllm` binary, run `make test-hw`
+**Topic:** Phase 3b — External services, MCP server, A2A.
 - Phase 3b: External services, MCP server, A2A
 - External services: CalDAV calendar, IMAP/SMTP email, ntfy messaging (DD-035)
 - MCP server: expose Cortex tools to external clients (DD-019)
 - A2A protocol: client discovery + server Agent Card (DD-036)
 - Browser voice input (getUserMedia + audio streaming)
 - HTTPS / Caddy / TOTP 2FA (deployment hardening)
+- Still TODO: run `make test-hw` on Pi with updated test files
 
 ---
 

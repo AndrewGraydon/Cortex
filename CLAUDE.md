@@ -22,10 +22,11 @@ Seven-layer stack (HAL → Voice → Reasoning → Agent → Security → Web UI
 See `docs/design/scope-v0.1.md` for full spec.
 
 ## Design Decisions (DD-001 through DD-051)
-Key choices: Python 3.11+, Qwen3-VL-2B unified VLM (14.1 tok/s, DD-051), Kokoro-82M TTS,
-SenseVoice ASR, FastAPI backend, SQLite + sqlite-vec, ZeroMQ IPC, bubblewrap sandbox,
-systemd services. Audio via ALSA `default` device (DD-049, NOT hw:0,0).
-VLM via axllm serve (OpenAI-compat API, SSE streaming, no separate tokenizer server).
+Key choices: Python 3.11+, Qwen3-VL-2B unified VLM (1,771 MiB measured, ~10 tok/s, DD-051),
+Kokoro-82M TTS, SenseVoice ASR, FastAPI backend, SQLite + sqlite-vec, ZeroMQ IPC,
+bubblewrap sandbox, systemd services. Audio via ALSA `default` device (DD-049, NOT hw:0,0).
+VLM via axllm serve (compiled from source, port 8080, OpenAI-compat API, SSE streaming,
+config.json required with tokenizer_type "Qwen3VL", no separate tokenizer server).
 LCD display adapted from PiSugar whisplay-ai-chatbot (Pillow + cairosvg + SPI).
 Script-based tools with progressive disclosure (DD-050) — TOOL.yaml + scripts/ folders as
 alternative to Python handler classes, inspired by Anthropic's Claude Skills architecture.
@@ -57,13 +58,13 @@ alternative to Python handler classes, inspired by Anthropic's Claude Skills arc
 ## Conventions
 - Update `context/project-context.md` when making significant design decisions
 - Design decisions use IDs: DD-NNN with date and rationale
-- Scope doc version bumps on changes (currently v0.1.22)
+- Scope doc version bumps on changes (currently v0.1.23)
 - Hardware metrics go in `docs/guides/phase-0-hardware-setup.md` completion checklist
 - Models stored in `models/` (gitignored), runtime data in `data/` (gitignored)
 - No secrets in config files — use `.env` (gitignored)
 
 ## Hardware Constraints (keep in mind)
-- NPU memory: 8GB total, 7040 MiB usable. Model budget: 3,043 MiB (43% used, 56.8% headroom)
+- NPU memory: 8GB total, 7040 MiB usable. Model budget: 2,254 MiB (32% used, 68% headroom)
 - PCIe 2.0 x1 to NPU: ~500 MB/s — minimize host↔NPU transfers
 - Combined power ~19W — mains power required for NPU inference
 - PiSugar AUTO switch must be disabled (I2C conflict with Whisplay)

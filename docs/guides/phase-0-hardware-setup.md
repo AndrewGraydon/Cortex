@@ -393,8 +393,8 @@ git clone https://huggingface.co/AXERA-TECH/Qwen3-VL-2B-ax650 --depth 1
 #   Same test images, compare description quality
 # Note: 7.80 tok/s, 3.7 GB — fits but uses more memory than 1.7B
 ```
-**Result:** not needed (separate models more flexible)
-**Notes:** Qwen3-1.7B (3375 MiB) + FastVLM-0.5B (792 MiB) = 4167 MiB total. Qwen3-VL-2B would be ~3700 MiB but loses architectural flexibility: can't run text-only at dedicated speed, can't use Qwen3-0.6B as fast classifier, can't load/unload models independently. GPTQ-Int4 variant also available (lower memory) but same flexibility tradeoff. AXERA-TECH has Qwen3-VL-2B-Instruct and GPTQ-Int4 on HuggingFace if revisited later.
+**Result:** ADOPTED (DD-051, 2026-03-04)
+**Notes:** Originally rejected for flexibility reasons. Revisited with GPTQ-Int4 quantization: Qwen3-VL-2B-Instruct-GPTQ-Int4 measured at 1,771 MiB CMM (vs 3,375+792=4,167 MiB for Qwen3-1.7B+FastVLM), ~10 tok/s (1.3x faster than Qwen3-1.7B), built-in vision, OpenAI-compatible API via `axllm serve`, no separate tokenizer server. Memory savings: 2,396 MiB. New 3-model total: 2,254 MiB (32% of NPU, 68% headroom). The flexibility tradeoff is acceptable — Qwen3-0.6B retained as fast fallback. axllm binary must be compiled from source (axllm branch of AXERA-TECH/ax-llm). See §0.8 for full setup instructions.
 
 ---
 
@@ -413,21 +413,24 @@ HARDWARE VALIDATION
 [ ] CSI camera captures image — SKIPPED (no camera attached)
 [x] I2C stable under NPU load (0x1a=WM8960 UU, 0x40=Whisplay component)
 
-NPU METRICS (measured 2026-03-02)
+NPU METRICS (measured 2026-03-02, updated 2026-03-04)
 Total CMM:              7040 MiB
 SenseVoice size:        251 MiB (CMM during operation)
-Qwen3-1.7B size:        3375 MiB (CMM including 2047-token KV cache)
+Qwen3-VL-2B size:       1771 MiB (CMM measured, GPTQ-Int4, DD-051)
 Kokoro-82M size:        232 MiB (CMM during operation)
-FastVLM-0.5B size:      792 MiB (CMM, weights only; +~300 MiB with KV cache)
-All 4 co-resident:      YES (estimated total: ~4950 MiB, headroom: ~2090 MiB / 29.7%)
+All 3 co-resident:      YES (total: 2,254 MiB, headroom: 4,786 MiB / 68%)
 Qwen3-0.6B tok/s:       13.74
-Qwen3-1.7B tok/s:       7.70
-FastVLM-0.5B:           ~35 tok/s decode, ~60ms image encode (from AXERA benchmarks)
+Qwen3-VL-2B tok/s:      ~10 (measured), max_token_len 2047
 SenseVoice RTF:          0.028 (C++ AXCL aarch64 binary)
 Kokoro RTF:              0.115 (Python), 0.067 (C++ — no aarch64 AXCL binary yet)
 Kokoro audio quality:    GOOD (24kHz mono, natural voice, intelligible)
 NPU idle temp:           41°C
-NPU load temp:           50°C (during LLM inference)
+NPU load temp:           50°C (during VLM inference)
+
+REPLACED MODELS (historical, pre DD-051)
+Qwen3-1.7B size:        3375 MiB (CMM including 2047-token KV cache) — replaced by Qwen3-VL-2B
+Qwen3-1.7B tok/s:       7.70
+FastVLM-0.5B size:      792 MiB — replaced by Qwen3-VL-2B built-in vision
 
 POWER METRICS
 Battery capacity:    N/A — PiSugar not connected
@@ -440,7 +443,7 @@ INVESTIGATIONS
 Speculative decoding:     not supported (no draft_model in binary)
 Constrained generation:   stop tokens only (post_config.json: temp/top_p/top_k/rep_penalty)
 Moonshine ASR:            not needed (SenseVoice has streaming_sensevoice.axmodel on NPU)
-Unified multimodal (VL-2B): not needed (separate models more flexible, ~4167 MiB combined)
+Unified multimodal (VL-2B): ADOPTED (DD-051 — GPTQ-Int4 measured 1771 MiB, 68% headroom)
 
 SYSTEM
 OS:                  Debian 12 Bookworm (Raspberry Pi OS 64-bit)
@@ -502,6 +505,72 @@ bash run_qwen3_0.6b_int8_ctx_axcl_aarch64.sh
 # Model load: ~23s (0.6B), ~43s (1.7B). Interactive prompt loop.
 ```
 
+### Qwen3-VL-2B (Primary VLM — DD-051, replaces Qwen3-1.7B + FastVLM-0.5B)
+
+```bash
+# Step 1: Download pre-compiled model weights from AXERA-TECH
+cd ~/Cortex
+.venv/bin/python -c "
+from huggingface_hub import snapshot_download
+snapshot_download('AXERA-TECH/Qwen3-VL-2B-Instruct-GPTQ-Int4',
+                  local_dir='/home/andrew/models/Qwen3-VL-2B')
+"
+# Download size: ~4.1 GB (79 files). Takes ~10 minutes.
+
+# Step 2: Compile axllm binary from source (REQUIRED — no pre-built binary available)
+cd /tmp
+git clone --branch axllm --depth 1 https://github.com/AXERA-TECH/ax-llm.git
+cd ax-llm
+git submodule update --init --recursive
+mkdir build_native && cd build_native
+cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_AX650=OFF -DBUILD_AXCL=ON ..
+make -j4
+# Build takes ~5 minutes on Pi 5. Produces: install/bin/axllm (2.2MB ELF aarch64)
+cp install/bin/axllm ~/models/Qwen3-VL-2B/axllm
+chmod +x ~/models/Qwen3-VL-2B/axllm
+
+# Step 3: Create config.json in model directory (REQUIRED by axllm serve)
+cat > ~/models/Qwen3-VL-2B/config.json << 'CONF'
+{
+    "template_filename_axmodel": "Qwen3-VL-2B-Instruct-AX650-c128_p1152-int4/qwen3_vl_text_p128_l%d_together.axmodel",
+    "filename_post_axmodel": "Qwen3-VL-2B-Instruct-AX650-c128_p1152-int4/qwen3_vl_text_post.axmodel",
+    "url_tokenizer_model": "qwen3_tokenizer.txt",
+    "tokenizer_type": "Qwen3VL",
+    "filename_tokens_embed": "Qwen3-VL-2B-Instruct-AX650-c128_p1152-int4/model.embed_tokens.weight.bfloat16.bin",
+    "post_config_path": "post_config.json",
+    "axmodel_num": 28,
+    "tokens_embed_num": 151936,
+    "tokens_embed_size": 2048,
+    "b_use_mmap_load_embed": true,
+    "devices": [0],
+    "model_name": "qwen3-vl-2b",
+    "system_prompt": "You are Cortex, a helpful voice assistant."
+}
+CONF
+
+# Step 4: Verify standalone
+cd ~/models/Qwen3-VL-2B
+./axllm serve . --port 8080 &
+# Wait ~45 seconds for model to load (28 layers + post model)
+curl -s http://127.0.0.1:8080/v1/models  # Should return model list
+curl -s -X POST http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3-vl-2b","messages":[{"role":"user","content":"What is 2+2?"}]}'
+# Expected: {"choices":[{"message":{"content":"4",...}}]}
+kill %1
+
+# GOTCHA: No pre-built binary. Must compile from axllm branch of ax-llm repo.
+# GOTCHA: tokenizer_type MUST be "Qwen3VL" (not "tiktoken" or "qwen3").
+#   See ax-llm/third_party/tokenizer.axera/src/Qwen3Tokenizer.hpp:
+#   REGISTER(Qwen3VL, qwen3vl_tokenizer)
+# GOTCHA: Default port is 8080 (not 8000). VLMRunner uses 8080.
+# GOTCHA: config.json is required in model directory — axllm reads it on startup.
+#   The old main_axcl_aarch64 used shell scripts with CLI args; axllm uses JSON.
+# GOTCHA: No separate tokenizer server needed (integrated into axllm binary).
+# GOTCHA: Model load takes ~45 seconds (28 layer axmodels + post model + embeddings).
+# Measured: 1,771 MiB CMM, ~10 tok/s, max_token_len 2047, 50°C under load.
+```
+
 ### SenseVoice ASR
 
 ```bash
@@ -543,7 +612,11 @@ python3 kokoro_ax.py --text 'Hello world' --lang en \
 # GOTCHA: Init takes ~9s (loading 3 NPU models + 1 CPU ONNX vocoder).
 ```
 
-### FastVLM-0.5B (VLM)
+### FastVLM-0.5B (VLM) — REPLACED by Qwen3-VL-2B (DD-051)
+
+> **Note:** FastVLM-0.5B is no longer used. Qwen3-VL-2B provides built-in vision
+> with better quality and lower total memory (1,771 vs 3,375+792 MiB). See §0.8
+> "Qwen3-VL-2B" section above. Kept here for historical reference only.
 
 ```bash
 hf download AXERA-TECH/FastVLM-0.5B --local-dir ~/models/FastVLM-0.5B

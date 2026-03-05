@@ -2,10 +2,15 @@
 
 Architecture (DD-051):
   Cortex VLMRunner
-    └── Subprocess: axllm serve <model_dir> (port 8000, OpenAI-compat API)
+    └── Subprocess: axllm serve <model_dir> (port 8080, OpenAI-compat API)
 
 The axllm binary handles all NPU operations including the integrated tokenizer
 and image encoder. Communication is via HTTP with SSE streaming.
+
+Prerequisites:
+  - axllm binary: compiled from source (axllm branch of AXERA-TECH/ax-llm)
+  - config.json: must exist in model_dir with tokenizer_type, axmodel paths, etc.
+  - See docs/guides/phase-0-hardware-setup.md §0.8 for build instructions.
 
 API format (new axllm binary, OpenAI-compatible):
   POST /v1/chat/completions — chat completion with optional vision (images)
@@ -30,8 +35,8 @@ from cortex.hal.types import InferenceInputs, InferenceOutputs
 
 logger = logging.getLogger(__name__)
 
-# Default port for axllm serve
-DEFAULT_API_PORT = 8000
+# Default port for axllm serve (axllm defaults to 8080)
+DEFAULT_API_PORT = 8080
 
 # SSE streaming timeout (seconds per token — generous for slow generation)
 SSE_READ_TIMEOUT = 120.0
@@ -70,10 +75,12 @@ class VLMRunner:
         """Start axllm serve subprocess.
 
         Args:
-            model_path: Path to model directory (e.g., ~/models/Qwen3-VL-2B)
+            model_path: Path to model directory containing config.json and axllm binary.
+                The model dir must have a config.json with tokenizer_type, axmodel
+                template paths, and embedding configuration. See Phase 0 guide.
             config: Configuration dict with optional overrides:
-                - api_port: HTTP API port (default 8000)
-                - memory_mb: NPU memory in MB (default 2560)
+                - api_port: HTTP API port (default 8080)
+                - memory_mb: NPU memory in MB (default 1771, measured on hardware)
                 - system_prompt: System prompt for the LLM
                 - axllm_binary: Path to axllm binary (default: search model dir)
         """
@@ -83,7 +90,7 @@ class VLMRunner:
 
         self._model_path = model_path
         self._api_port = config.get("api_port", DEFAULT_API_PORT)
-        self._memory_mb = config.get("memory_mb", 2560)
+        self._memory_mb = config.get("memory_mb", 1771)
         self._system_prompt = config.get("system_prompt", "You are a helpful assistant.")
 
         try:
