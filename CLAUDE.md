@@ -12,9 +12,9 @@ Privacy-first, local-first, with optional secure external access.
 - **Config template:** `config/cortex.yaml.template`
 
 ## Current Phase
-**Phase 3a — Web Foundation — COMPLETE.** 7 milestones, 736 unit + integration tests passing.
+**Phase 3a — Web Foundation — COMPLETE.** 7 milestones, 765 unit + integration tests passing.
 FastAPI + HTMX + DaisyUI, bcrypt auth, WebSocket chat, dashboard, approvals, notifications, tools, settings.
-All NPU hardware tests passing on Pi (7/7: ASR, LLM, TTS, multi-model, full pipeline).
+All NPU hardware tests passing on Pi (8/8: ASR, VLM, TTS, multi-model, full pipeline).
 Next: Phase 3b — External services (CalDAV, IMAP, ntfy), MCP server, A2A protocol.
 
 ## Architecture
@@ -27,6 +27,8 @@ Kokoro-82M TTS, SenseVoice ASR, FastAPI backend, SQLite + sqlite-vec, ZeroMQ IPC
 bubblewrap sandbox, systemd services. Audio via ALSA `default` device (DD-049, NOT hw:0,0).
 VLM via axllm serve (compiled from source, port 8080, OpenAI-compat API, SSE streaming,
 config.json required with tokenizer_type "Qwen3VL", no separate tokenizer server).
+AXCL lifecycle: repeated axllm start/stop corrupts kernel module state — VLM must load
+first and stay alive for service lifetime (CortexService loads VLM before ASR/TTS).
 LCD display adapted from PiSugar whisplay-ai-chatbot (Pillow + cairosvg + SPI).
 Script-based tools with progressive disclosure (DD-050) — TOOL.yaml + scripts/ folders as
 alternative to Python handler classes, inspired by Anthropic's Claude Skills architecture.
@@ -58,7 +60,7 @@ alternative to Python handler classes, inspired by Anthropic's Claude Skills arc
 ## Conventions
 - Update `context/project-context.md` when making significant design decisions
 - Design decisions use IDs: DD-NNN with date and rationale
-- Scope doc version bumps on changes (currently v0.1.23)
+- Scope doc version bumps on changes (currently v0.1.24)
 - Hardware metrics go in `docs/guides/phase-0-hardware-setup.md` completion checklist
 - Models stored in `models/` (gitignored), runtime data in `data/` (gitignored)
 - No secrets in config files — use `.env` (gitignored)

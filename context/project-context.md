@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-03-04 (Session 20)
+# Last updated: 2026-03-05 (Session 21)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -340,6 +340,18 @@ Cortex/
 
   **Measured memory budget:** SenseVoice (251) + Qwen3-VL-2B (**1,771 measured**) + Kokoro (232) = **2,254 MiB — 68% headroom** (was 29.7% with old 4-model stack). Old LLMRunner kept for Qwen3-0.6B backward compat.
 
+- **Session 21 (2026-03-05):** Hardware test validation and AXCL lifecycle constraints. Ran `make test-hw` on Pi with Qwen3-VL-2B migration code. Discovered and fixed three issues:
+
+  **1. Missing `model` field in API requests** — axllm serve returns 400 Bad Request without the `model` field in `/v1/chat/completions` body. Fixed: VLMRunner captures model name from `GET /v1/models` response during `_wait_for_ready()` and includes it in all request bodies.
+
+  **2. AXCL kernel module lifecycle corruption** — Repeated axllm serve start/stop cycles corrupt AXCL device context. axllm exits with code 255, stderr: `thread hasn't binded any context yet`. Root cause: AXCL kernel module doesn't cleanly release device context after subprocess terminates. Fix: VLM must load once and stay alive for service lifetime. CortexService now loads VLM first (before ASR/TTS). Hardware test uses module-scoped VLM fixture (one axllm serve for entire test module), cleanup fixture skips VLM unload.
+
+  **3. Event loop mismatch with module-scoped fixtures** — Module-scoped async fixtures create httpx AsyncClient bound to one event loop, but function-scoped tests each get their own loop. Streaming requests fail with "Event loop is closed". Fix: `loop_scope="module"` in pytest-asyncio marker ensures all tests share one event loop.
+
+  **Additional improvements:** VLMRunner crash detection in `_wait_for_ready()` — checks subprocess exit code and reports stderr immediately instead of waiting full timeout. Timeout increased 120→180s. 0.5s port release delay in `unload()`.
+
+  **Result:** 8/8 NPU hardware tests passing (ASR load/infer, ASR memory, VLM load/infer, VLM streaming, VLM think-tag stripping, TTS load/infer, ASR+TTS co-resident, full ASR→VLM→TTS pipeline). 765 unit tests passing. Lint + mypy clean.
+
 ### NEXT SESSION — Resume Here
 **Topic:** Phase 3b — External services, MCP server, A2A.
 - Phase 3b: External services, MCP server, A2A
@@ -348,7 +360,6 @@ Cortex/
 - A2A protocol: client discovery + server Agent Card (DD-036)
 - Browser voice input (getUserMedia + audio streaming)
 - HTTPS / Caddy / TOTP 2FA (deployment hardening)
-- Still TODO: run `make test-hw` on Pi with updated test files
 
 ---
 
