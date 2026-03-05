@@ -30,7 +30,7 @@ SENSEVOICE_DIR = MODELS_DIR / "SenseVoice"
 QWEN3_VL_DIR = MODELS_DIR / "Qwen3-VL-2B"
 KOKORO_DIR = MODELS_DIR / "Kokoro"
 
-pytestmark = pytest.mark.hardware
+pytestmark = [pytest.mark.hardware, pytest.mark.asyncio(loop_scope="module")]
 
 
 @pytest.fixture(scope="module")
