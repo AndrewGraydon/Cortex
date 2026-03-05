@@ -87,6 +87,7 @@ class TestRequestBodyBuilding:
         runner = VLMRunner()
         messages = [{"role": "user", "content": "Hi"}]
         body = runner._build_request_body(messages, {}, stream=False)
+        assert body["model"] == "default"
         assert body["messages"] == messages
         assert body["stream"] is False
         assert "temperature" not in body

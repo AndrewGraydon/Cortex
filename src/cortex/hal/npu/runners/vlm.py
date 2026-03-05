@@ -58,6 +58,7 @@ class VLMRunner:
         self._api_port = DEFAULT_API_PORT
         self._model_path: Path | None = None
         self._system_prompt: str = ""
+        self._model_name: str = "default"
 
     @property
     def model_type(self) -> str:
@@ -247,6 +248,7 @@ class VLMRunner:
     ) -> dict[str, Any]:
         """Build OpenAI-format request body."""
         body: dict[str, Any] = {
+            "model": self._model_name,
             "messages": messages,
             "stream": stream,
         }
@@ -335,9 +337,11 @@ class VLMRunner:
         msg = f"axllm binary not found in {model_path} or PATH"
         raise FileNotFoundError(msg)
 
-    @staticmethod
-    async def _wait_for_ready(base_url: str, timeout: float) -> None:
-        """Poll GET /v1/models until the server is ready."""
+    async def _wait_for_ready(self, base_url: str, timeout: float) -> None:
+        """Poll GET /v1/models until the server is ready.
+
+        Also captures the model name from the response for use in API requests.
+        """
         deadline = asyncio.get_event_loop().time() + timeout
         url = f"{base_url}/v1/models"
 
@@ -346,7 +350,12 @@ class VLMRunner:
                 try:
                     resp = await client.get(url, timeout=2.0)
                     if resp.status_code == 200:
-                        logger.info("axllm ready at %s", base_url)
+                        # Extract model name from response
+                        data = resp.json()
+                        models = data.get("data", [])
+                        if models:
+                            self._model_name = models[0].get("id", "default")
+                        logger.info("axllm ready at %s (model: %s)", base_url, self._model_name)
                         return
                 except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException):
                     pass
