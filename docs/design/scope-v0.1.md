@@ -64,7 +64,7 @@ Four personas anchor the interaction design. Each maps to a permission level and
 │  Permission Engine │ Sandbox │ Audit Log │ Crypto Store  │
 ├─────────────────────────────────────────────────────────┤
 │                 REASONING CORE                           │
-│     Qwen3-1.7B (primary)  │  Model Router │ Prompt Mgr  │
+│    Qwen3-VL-2B (primary)  │  Model Router │ Prompt Mgr  │
 ├─────────────────────────────────────────────────────────┤
 │                  VOICE PIPELINE                          │
 │   Button/Wake → ASR → [LLM] → TTS → Speaker             │
@@ -159,7 +159,7 @@ A dedicated HAL-level service that continuously monitors system health and publi
     "battery": {"status": "healthy", "level_pct": 85, "charging": true},
     "services": {"status": "healthy", "failed": []}
   },
-  "models_loaded": ["sensevoice", "qwen3-1.7b", "kokoro", "fastvlm-0.5b"]
+  "models_loaded": ["sensevoice", "qwen3-vl-2b", "kokoro"]
 }
 ```
 Overall `status` is the worst of any component: all healthy = healthy, any warning = degraded, any critical = critical.
@@ -206,14 +206,14 @@ The system adapts its capability level based on power state, balancing performan
 
 | Profile | Trigger | LLM | ASR | TTS | Health Polling | Display |
 |---|---|---|---|---|---|---|
-| `mains` | AC power detected (PiSugar charging) | Qwen3-1.7B (`chat` profile) | SenseVoice | Kokoro (full) | Full intervals | Full brightness |
+| `mains` | AC power detected (PiSugar charging) | Qwen3-VL-2B (`chat` profile) | SenseVoice | Kokoro (full) | Full intervals | Full brightness |
 | `battery` | On battery, > 15% | Qwen3-0.6B (`quick` profile) | SenseVoice | Kokoro (full) | 2x intervals | 50% brightness |
 | `low_battery` | Battery < 15% | Qwen3-0.6B (`quick` profile) | SenseVoice | Kokoro (short) | 4x intervals | 30% brightness |
 | `critical` | Battery < 5% | None (regex-only utility commands) | None | None (LCD text only) | Off | Dim, static |
 
 **Behavior on Profile Transitions:**
-- `mains` → `battery`: Load Qwen3-0.6B, unload Qwen3-1.7B, reduce polling, dim display. Voice feedback: "Switched to battery mode."
-- `battery` → `mains`: Load Qwen3-1.7B, unload Qwen3-0.6B, restore full polling/brightness. Voice feedback: "Full power restored."
+- `mains` → `battery`: Load Qwen3-0.6B, unload Qwen3-VL-2B, reduce polling, dim display. Voice feedback: "Switched to battery mode."
+- `battery` → `mains`: Load Qwen3-VL-2B, unload Qwen3-0.6B, restore full polling/brightness. Voice feedback: "Full power restored."
 - `battery` → `low_battery`: Further reduce polling, skip post-session memory extraction (defer to next mains period), disable proactive engine.
 - `low_battery` → `critical`: Unload all NPU models, save state, enter minimal mode. LCD shows: "Battery critical — limited to basic commands."
 - `critical` → shutdown: Clean shutdown after saving working memory and pending schedules to SQLite.
@@ -288,23 +288,20 @@ This eliminates VAD entirely from the system — no Silero, no silence detection
 |---|---|---|---|---|
 | SenseVoice-Small | ASR (Speech-to-Text) | 251 MiB | 6,789 MiB | RTF 0.028 (36x real-time) |
 | Qwen3-0.6B (w8a16) | Quick commands / orchestrator | 2,011 MiB | 5,029 MiB | 13.74 tok/s |
-| **Qwen3-1.7B (w8a16)** | **Primary LLM (default)** | **3,375 MiB** | **3,665 MiB** | **7.70 tok/s** |
+| **Qwen3-VL-2B-GPTQ-Int4** | **Primary VLM — text + vision (DD-051)** | **1,771 MiB** | **5,269 MiB** | **~10 tok/s** |
 | Kokoro-82M (v1.0, axmodel) | TTS (Text-to-Speech) | 232 MiB | — | RTF 0.115 (9x real-time, Python path) |
-| FastVLM-0.5B | Vision (always resident, DD-045) | 792 MiB | — | Excellent descriptions (Python path) |
-| **Default co-resident set** | | **~4.95 GB** | **~2.09 GB** | All models loaded simultaneously |
+| **Default co-resident set** | **VLM + ASR + TTS** | **2,254 MiB** | **4,786 MiB (68%)** | All 3 models loaded simultaneously |
 
 **Why not Qwen3-4B?** Evaluated — uses 6.2 GB CMM (691 MB remaining), only 3.65 tok/s, max 2,559 tokens. Cannot co-reside with ANY other model. Every voice interaction would require sequential model swaps (ASR→LLM→TTS). Not viable as primary. Available as hot-swap for heavy reasoning when Pulsar2 v4.2 releases. See DD-029.
 
-**Vision model hot-swap pool (loaded on demand, replaces Qwen3-1.7B temporarily):**
+**Vision model hot-swap pool (loaded on demand, replaces Qwen3-VL-2B temporarily):**
 
 | Model | Purpose | Est. NPU Memory | Notes |
 |---|---|---|---|
-| InternVL3-1B | Detailed image analysis | ~1.5GB (est.) | Best quality; requires unloading LLM |
-| Qwen2.5-VL-3B-Instruct | Advanced multimodal reasoning | ~3GB (est.) | Largest; requires unloading LLM + possibly ASR |
-| Qwen3-VL-4B-GPTQ-Int4 | Combined LLM+VLM (future) | ~5.1 GB | INT4; replaces both LLM and VLM; needs Pulsar2 v4.2 |
+| InternVL3-1B | Detailed image analysis | ~1.5GB (est.) | Higher quality for complex scenes; requires unloading VLM |
+| Qwen3-VL-4B-GPTQ-Int4 | Heavy multimodal reasoning (future) | ~5.1 GB | INT4; needs Pulsar2 v4.2 |
 
 **Additional models available from [AXERA-TECH catalog](https://huggingface.co/AXERA-TECH) (149+ models):**
-- FastVLM-0.5B evaluated and selected as default VLM (DD-045) — replaces SmolVLM2-500M
 - DeepSeek-R1-Distill-Qwen-1.5B (alternative reasoning), InternVL3.5, MiniCPM4-V (newer VLMs for hot-swap evaluation)
 - Qwen3-Embedding-0.6B (potential NPU-accelerated embedding model for memory retrieval)
 
@@ -315,20 +312,20 @@ This eliminates VAD entirely from the system — no Silero, no silence detection
 
 **Latency Budget (voice round-trip, first audio target: < 3 seconds):**
 - ASR: < 500ms for typical utterance (button release triggers immediate ASR — no VAD delay on any interface)
-- LLM first token: ~1-2s (prefill)
-- LLM generation (50-token response @ 7.70 tok/s measured): ~6.5s total
+- VLM first token: ~1-2s (prefill)
+- VLM generation (50-token response @ ~10 tok/s measured): ~5s total
 - TTS first audio: < 200ms after first sentence complete (streaming)
 - **Critical optimization:** Stream TTS while LLM is still generating (sentence-level chunking). First audio plays within ~5s of button release even though full generation takes longer. See Streaming Voice Pipeline below.
 
 #### 4.2.1 Streaming Voice Pipeline
 
-**Problem:** At 7.70 tok/s (measured), a 50-token response takes ~6.5s of silence before the user hears anything. Unacceptable for voice UX.
+**Problem:** At ~10 tok/s (measured, Qwen3-VL-2B), a 50-token response takes ~5s of silence before the user hears anything. Unacceptable for voice UX.
 
-**Solution:** Sentence-boundary streaming with parallel TTS — deliver audio sentence-by-sentence while the LLM is still generating.
+**Solution:** Sentence-boundary streaming with parallel TTS — deliver audio sentence-by-sentence while the VLM is still generating.
 
 ```
-LLM generates tokens ──→ Sentence Detector ──→ TTS Queue ──→ Audio Output
-    (7.70 tok/s)          (buffer until          (Kokoro       (sequential
+VLM generates tokens ──→ Sentence Detector ──→ TTS Queue ──→ Audio Output
+    (~10 tok/s)           (buffer until          (Kokoro       (sequential
                            sentence end)          synthesis)     playback)
 ```
 
@@ -342,16 +339,16 @@ Lightweight buffer on Pi 5 CPU that accumulates LLM output tokens and flushes on
 - Simple state machine implementation — no NLP library, negligible CPU overhead.
 
 **Parallel TTS via NPU Model Multiplexing (confirmed DD-048):**
-LLM (Qwen3-1.7B) and TTS (Kokoro-82M) are co-resident in NPU memory. While the LLM generates sentence 2, Kokoro synthesizes sentence 1. Phase 1 investigation confirmed ~0ms context-switch overhead between co-resident models via pyaxengine (10 rounds alternating SenseVoice 128.6ms + Kokoro 18.6ms with negligible switch time). Full streaming pipeline is confirmed feasible.
+VLM (Qwen3-VL-2B) and TTS (Kokoro-82M) are co-resident in NPU memory. While the VLM generates sentence 2, Kokoro synthesizes sentence 1. Phase 1 investigation confirmed ~0ms context-switch overhead between co-resident models via pyaxengine (10 rounds alternating SenseVoice 128.6ms + Kokoro 18.6ms with negligible switch time). Full streaming pipeline is confirmed feasible.
 
 Audio chunks played sequentially with 10ms linear crossfade (NumPy on CPU) to prevent pops/clicks at sentence boundaries.
 
 **Timeline example (3-sentence, ~80-token response, measured Phase 0 values):**
 ```
 t=0.0s  Button released, ASR starts
-t=0.5s  ASR complete (~28ms SenseVoice RTF 0.028), LLM prefill begins
-t=1.5s  LLM first token generated
-t=3.8s  First sentence complete (~18 tokens, ~2.3s generation @ 7.70 tok/s)
+t=0.5s  ASR complete (~28ms SenseVoice RTF 0.028), VLM prefill begins
+t=1.5s  VLM first token generated
+t=3.3s  First sentence complete (~18 tokens, ~1.8s generation @ ~10 tok/s)
 t=4.1s  Kokoro synthesizes sentence 1 (RTF 0.115 Python ≈ ~300ms for short sentence)
 t=4.4s  *** FIRST AUDIO PLAYS ***
 t=6.2s  Second sentence complete (generated while sentence 1 plays)
@@ -381,11 +378,11 @@ t=8.5s  Third sentence complete → synthesize → play seamlessly
 **Fallback:** Sequential mode (generate full LLM response, then synthesize all at once, TTFA ~7-10s) remains available as fallback for error recovery. Phase 1 investigation confirmed NPU multiplexing works with ~0ms switch overhead (DD-048), so streaming is the primary mode.
 
 **NPU Memory Management Strategy:**
-- Default: all four primary models co-resident (~4.95 GB of 7 GB, ~2.09 GB headroom — measured Phase 0).
+- Default: all three primary models co-resident (2,254 MiB of 7,040 MiB, 68% headroom — measured DD-051).
 - Kokoro uses a hybrid pipeline: 3 axmodel parts on NPU + ONNX vocoder on CPU, reducing NPU memory pressure.
 - Monitor via NPU Service; degrade gracefully (e.g., smaller ASR model) if memory pressure detected.
-- **Vision hot-swap:** FastVLM-0.5B stays resident for quick image descriptions (~792 MiB, see DD-045). For detailed analysis, unload Qwen3-1.7B, load InternVL3-1B or Qwen2.5-VL-3B, process image, then swap back. Voice pipeline pauses during hot-swap.
-- **Heavy reasoning hot-swap (future):** Qwen3-4B or Qwen3-VL-4B can be loaded for complex tasks, but requires unloading all other models. Only viable when hot-swap latency is confirmed acceptable (Phase 0 testing).
+- **Vision:** Qwen3-VL-2B handles both text and vision natively — no separate VLM needed (DD-051). For detailed analysis beyond 2B capability, hot-swap to InternVL3-1B (unloads VLM temporarily). Voice pipeline pauses during hot-swap.
+- **Heavy reasoning hot-swap (future):** Qwen3-4B or Qwen3-VL-4B can be loaded for complex tasks, but requires unloading all other models. Only viable when hot-swap latency is confirmed acceptable.
 
 ---
 
@@ -393,10 +390,12 @@ t=8.5s  Third sentence complete → synthesize → play seamlessly
 
 **Purpose:** The "brain" — language understanding, planning, tool dispatch.
 
-**Default Primary Model:** Qwen3-1.7B (w8a16 quantization on AX8850)
+**Default Primary Model:** Qwen3-VL-2B-Instruct-GPTQ-Int4 (DD-051, on AX8850 via axllm serve)
+- Unified text + vision — replaces separate LLM + VLM models
+- ~10 tok/s measured, 1,771 MiB CMM, 2,047 max tokens
+- OpenAI-compatible API (SSE streaming, integrated tokenizer)
 - Native Hermes-style tool calling support
-- Thinking/non-thinking mode switching (thinking for complex tasks, non-thinking for quick responses)
-- 32K native context window
+- Thinking/non-thinking mode switching
 
 #### 4.3.1 Model Provider Layer
 
@@ -455,7 +454,7 @@ Similar protocols for `ASRProvider` (audio → text), `TTSProvider` (text → au
 
 | Scenario | Network | LLM Provider | ASR/TTS Provider | Description |
 |---|---|---|---|---|
-| Fully offline | None | `axcl` (Qwen3-1.7B) | `axcl` (SenseVoice/Kokoro) | Physical Pi, no internet. Primary use case. |
+| Fully offline | None | `axcl` (Qwen3-VL-2B) | `axcl` (SenseVoice/Kokoro) | Physical Pi, no internet. Primary use case. |
 | LAN-only | LAN | `axcl` | `axcl` | Web UI accesses Pi on local network. |
 | Internet-connected | Internet | `axcl` primary, cloud fallback | `axcl` | Local NPU for speed; cloud for complex tasks. |
 | Remote LLM server | LAN/Internet | `ollama` or `openai_compatible` | `axcl` | Bigger models on another machine; Pi orchestrates. |
@@ -493,12 +492,12 @@ Each model profile specifies an ordered **provider chain** — the Model Router 
 profiles:
   chat:
     providers: [axcl, ollama, openai]  # NPU → Ollama → OpenAI
-    axcl: { model: qwen3-1.7b, mode: non_thinking }
+    axcl: { model: qwen3-vl-2b, mode: non_thinking }
     ollama: { model: qwen3:8b }
     openai: { model: gpt-4o-mini }
   reason:
     providers: [axcl, anthropic]
-    axcl: { model: qwen3-1.7b, mode: thinking }
+    axcl: { model: qwen3-vl-2b, mode: thinking }
     anthropic: { model: claude-sonnet-4-6 }
 ```
 
@@ -516,18 +515,17 @@ The Model Router maps task profiles to providers and models:
 
 | Profile | Default Provider | Default Model | Use Case | Mode |
 |---|---|---|---|---|
-| `chat` | `axcl` | Qwen3-1.7B | General conversation | Non-thinking |
-| `reason` | `axcl` | Qwen3-1.7B | Complex planning, multi-step tasks | Thinking |
-| `code` | `axcl` | Qwen3-1.7B | Tool/agent code generation | Thinking |
+| `chat` | `axcl` | Qwen3-VL-2B | General conversation | Non-thinking |
+| `reason` | `axcl` | Qwen3-VL-2B | Complex planning, multi-step tasks | Thinking |
+| `code` | `axcl` | Qwen3-VL-2B | Tool/agent code generation | Thinking |
 | `quick` | `axcl` | Qwen3-0.6B | Simple commands, slot filling | Non-thinking |
-| `vision_quick` | `axcl` | FastVLM-0.5B | Quick image descriptions (always resident) | Non-thinking |
+| `vision` | `axcl` | Qwen3-VL-2B | Image descriptions + multimodal reasoning (always resident, DD-051) | Non-thinking |
 | `vision_detail` | `axcl` | InternVL3-1B | Detailed image analysis (hot-swap) | — |
-| `vision_advanced` | `axcl` | Qwen2.5-VL-3B | Advanced multimodal reasoning (hot-swap) | — |
 | `fallback` | `openai` | gpt-4o-mini | Tasks beyond local capability | — |
 
 Each row is fully configurable — any profile can be rerouted to any enabled provider via YAML config. The orchestrator and each super agent reference profiles by name, not specific models.
 
-**Power-Aware Profile Selection:** The Model Router subscribes to power state changes on the ZeroMQ bus (see §4.1.2). When running on battery, the router overrides `chat`/`reason`/`code` profiles to use the `quick` model (Qwen3-0.6B) instead of Qwen3-1.7B, reducing NPU power consumption. The user can manually override this via voice ("Full power mode"). See DD-040.
+**Power-Aware Profile Selection:** The Model Router subscribes to power state changes on the ZeroMQ bus (see §4.1.2). When running on battery, the router overrides `chat`/`reason`/`code` profiles to use the `quick` model (Qwen3-0.6B) instead of Qwen3-VL-2B, reducing NPU power consumption. The user can manually override this via voice ("Full power mode"). See DD-040.
 
 **Prompt Management:**
 - System prompts stored as versioned templates.
@@ -539,7 +537,7 @@ Each row is fully configurable — any profile can be rerouted to any enabled pr
 
 ### 4.4 Agent Framework
 
-**Purpose:** Enable the LLM to reason freely, plan multi-step tasks, use tools, and execute pre-authorized actions — all within the extreme constraints of a 1.7B model at 4K context.
+**Purpose:** Enable the LLM to reason freely, plan multi-step tasks, use tools, and execute pre-authorized actions — all within the extreme constraints of a 2B model at 2K context.
 
 **Design Philosophy:** *Unconstrained thinking, constrained acting.* Agents can reason, plan, and discuss without restriction using cognitive tools (read-only, safe). But when an agent needs to change the world — control a device, write a file, send a request — the action flows through a pre-authorized Action Template with parameter validation, permission gating, and audit logging.
 
@@ -1402,7 +1400,7 @@ Cortex supports the [Agent2Agent (A2A) protocol](https://developers.googleblog.c
 | **MCP** | Tool/data access | Cortex calls HA's `get_light_state` tool |
 | **A2A** | Agent task delegation | Cortex delegates "research this topic and summarize" to a more capable agent on the network |
 
-A2A is particularly valuable for Cortex because the local 1.7B model has inherent capability limits. Rather than always falling back to a cloud LLM API (which is just raw inference), A2A allows delegating to a full *agent* running on a more powerful machine — with its own tools, memory, and reasoning loop.
+A2A is particularly valuable for Cortex because the local 2B model has inherent capability limits. Rather than always falling back to a cloud LLM API (which is just raw inference), A2A allows delegating to a full *agent* running on a more powerful machine — with its own tools, memory, and reasoning loop.
 
 **A2A Client — Delegate to External Agents (Phase 3):**
 - Discover external agents via Agent Cards (JSON metadata at `/.well-known/agent.json`)
@@ -1815,7 +1813,7 @@ System prompt templates stored in `config/prompts/` directory, versioned (v1, v2
 
 #### 4.6.5 Conversational Clarification & Repair
 
-A 1.7B model will misunderstand intent more often than a 70B model. Having a structured clarification strategy is *more* important on constrained hardware, not less.
+A 2B model will misunderstand intent more often than a 70B model. Having a structured clarification strategy is *more* important on constrained hardware, not less.
 
 **Confidence-Gated Routing:**
 When the orchestrator's classification confidence is below threshold (configurable, default 0.6), it does NOT silently route to the best-guess agent. Instead, it requests clarification: "I think you want to [X]. Is that right?" This prevents silent misrouting — the most frustrating failure mode for users.
@@ -1899,7 +1897,7 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 | NPU Runtime | AXCL (C/Python) | Official M5Stack SDK |
 | Model Providers | Provider Protocol abstraction layer | 7 providers: axcl (NPU), openai, anthropic, google, xai, ollama, openai_compatible. Per-profile routing with fallback chains. |
 | ASR | sherpa-onnx + AXCL (default) | Proven on LLM8850; cloud ASR available via provider layer |
-| LLM | AXCL native (default) | Qwen3-1.7B with Hermes tool calling; cloud/remote LLMs via provider layer |
+| LLM/VLM | AXCL native (default) | Qwen3-VL-2B via axllm serve (OpenAI-compat API, DD-051); cloud/remote LLMs via provider layer |
 | TTS | AXCL native + ONNX hybrid (default) | Kokoro-82M v1.0; cloud TTS available via provider layer |
 | Agent Framework | Custom 3-tier + Tool Adapter | LangGraph-inspired graph-of-functions; tool calling format auto-adapted per provider |
 | Action Engine | Custom Python (YAML templates + handlers) | Zero RAM overhead; replaces n8n/Node-RED for deterministic action execution |
@@ -1938,7 +1936,7 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 
 > **Exit criteria:**
 > - All completion checklist items in Phase 0 guide filled in (no blanks) — **DONE**
-> - All 4 models co-resident on NPU (total < 5 GB CMM) — **DONE** (measured ~4.95 GB with FastVLM-0.5B, 29.7% headroom)
+> - All 3 models co-resident on NPU (total < 3 GB CMM) — **DONE** (measured 2,254 MiB with Qwen3-VL-2B, 68% headroom; DD-051)
 > - Zero I2C conflicts under sustained NPU load — **DONE** (PiSugar AUTO disabled, no conflicts)
 > - All 4 investigations documented with findings and decision — **DONE** (speculative decoding: not supported, constrained gen: stop tokens only, Moonshine: not needed, unified multimodal: not needed)
 > - Phase 0 completion checklist committed to repo — **PENDING** (this commit)
@@ -1950,7 +1948,7 @@ Cortex can participate in the Home Assistant voice ecosystem via the [Wyoming pr
 - NPU Service Protocol abstraction — hardware-agnostic interface, AXCL + Mock implementations (DD-041)
 - Button activation (GPIO 11 hold-to-talk) on Pi
 - ASR (SenseVoice) on NPU
-- LLM (Qwen3-1.7B) on NPU — basic chat
+- VLM (Qwen3-VL-2B) on NPU — basic chat + vision
 - TTS (Kokoro-82M) on NPU
 - End-to-end voice conversation
 - Streaming voice pipeline (sentence detector, TTS queue, crossfade)
@@ -2138,7 +2136,7 @@ data/
 | Risk | Impact | Mitigation |
 |---|---|---|
 | NPU memory too tight for 3 models | Voice pipeline breaks | Profile early; smaller models; sequential loading |
-| Qwen3-1.7B insufficient for complex tasks | Poor tool calling | Structured prompts, constrained generation, cloud fallback |
+| Qwen3-VL-2B insufficient for complex tasks | Poor tool calling | Structured prompts, constrained generation, cloud fallback |
 | Power budget exceeds PiSugar capacity | System brownout | Aggressive power gating; mains power for inference |
 | AXCL ecosystem immaturity | Missing features | Pin versions; abstract NPU backend |
 | Sandbox overhead on Pi 5 | Latency increase | bubblewrap is near-zero overhead |
@@ -2183,7 +2181,7 @@ data/
 | DD-002 | Local-first with optional external access | 2026-02-27 | Privacy-first while maintaining flexibility |
 | DD-003 | Tiered autonomy (4-tier permissions) | 2026-02-27 | Safe actions auto, risky actions need approval |
 | DD-004 | General-purpose assistant focus | 2026-02-27 | Avoids premature domain-specific optimization |
-| DD-005 | Qwen3-1.7B as primary model | 2026-02-27 | Confirmed: 7.70 tok/s (measured Phase 0), 3,375 MiB CMM, 4K context on M.2 + Pi 5. Best balance of speed, memory, and capability. Qwen3-4B rejected (3.65 tok/s, 6.2 GB CMM, fills NPU, see DD-029). Native Hermes tool calling. |
+| DD-005 | Qwen3-1.7B as primary model | 2026-02-27 | **Superseded by DD-051 (Qwen3-VL-2B is now primary).** Originally confirmed: 7.70 tok/s (measured Phase 0), 3,375 MiB CMM, 4K context on M.2 + Pi 5. Best balance of speed, memory, and capability. Qwen3-4B rejected (3.65 tok/s, 6.2 GB CMM, fills NPU, see DD-029). Native Hermes tool calling. |
 | DD-006 | FastAPI + HTMX for web UI | 2026-02-27 | Lightweight async server; HTMX for server-driven interactivity with minimal JavaScript. Framework choice deferred to Phase 3 (DD-013) but FastAPI backend confirmed. |
 | DD-007 | SQLite + sqlite-vec for storage | 2026-02-27 | No separate database server; sqlite-vec adds brute-force KNN vector search for memory retrieval without external dependencies. Sufficient for <50K entries on Pi 5. |
 | DD-008 | ZeroMQ for IPC | 2026-02-27 | Brokerless, fast pub/sub and req/rep patterns; lighter than gRPC (protobuf overhead) or D-Bus (heavyweight for simple messaging). JSON message format. |
@@ -2198,7 +2196,7 @@ data/
 | DD-017 | Qwen-Agent as library only | 2026-02-27 | NousFnCallPrompt for Qwen3-native tool-call parsing; full frameworks rejected (see DD-018) |
 | DD-018 | Custom framework over CrewAI/LangGraph/AutoGen | 2026-02-27 | CrewAI: 32GB RAM, ChromaDB dep; AutoGen: conversation paradigm fills 4K in 2-3 exchanges; LangGraph: closest but langchain-core bloat for ~500 LOC of graph execution; smolagents: prompt bloat; Swarm: deprecated |
 | DD-019 | MCP protocol support (client + server) | 2026-02-27 | Standard tool interop via Python `mcp` SDK; client discovers external tools (HA, n8n) and maps to cognitive tools or action templates with permission gating; server exposes Cortex tools to external AI clients via Streamable HTTP on FastAPI |
-| DD-020 | Tiered VLM vision system | 2026-02-27 | FastVLM-0.5B always resident (~792 MiB, see DD-045) for quick image descriptions; hot-swap to InternVL3-1B or Qwen2.5-VL-3B for detailed analysis (unloads LLM temporarily). Three input sources: CSI camera (physical), webcam (web UI), image upload (web UI). |
+| DD-020 | Tiered VLM vision system | 2026-02-27 | **Superseded by DD-051 (Qwen3-VL-2B provides unified LLM+vision).** Originally: FastVLM-0.5B always resident (~792 MiB, see DD-045) for quick image descriptions; hot-swap to InternVL3-1B or Qwen2.5-VL-3B for detailed analysis (unloads LLM temporarily). Three input sources: CSI camera (physical), webcam (web UI), image upload (web UI). |
 | DD-021 | Button-first interaction with Web UI parity | 2026-02-27 | Physical Pi uses Whisplay button (GPIO 11) as sole input — hold=push-to-talk, double-click=camera capture, single-click=approve, long-press=deny/cancel, triple-click=system menu. No VAD anywhere (eliminates false activations and privacy concerns). Web UI provides full parity via software equivalents (record button, webcam/upload, approve/deny buttons). |
 | DD-022 | Configurable model provider layer | 2026-02-27 | All model interactions (LLM, ASR, TTS, VLM) routed through provider-agnostic Protocol interfaces. Seven provider types: axcl (local NPU), openai, anthropic, google, xai, ollama, openai_compatible. Per-profile provider chains with automatic fallback and circuit breaker. Tool calling format adapted transparently per provider via Tool Adapter. Context budgets scale dynamically with provider context window. API keys in .env, cloud calls auto-gated by security layer. Default config is fully offline (axcl only) — cloud/remote providers are opt-in. |
 | DD-023 | SenseVoice-Small as primary ASR engine | 2026-02-27 | Non-autoregressive architecture gives 10-20x lower latency than Whisper-Small on AX8850 NPU (~50-75ms vs ~800-1800ms per utterance). English WER comparable (~3-4% vs 3.4%). Same NPU memory (~500MB). Single axmodel vs Whisper's 3 (faster load/swap). 5 languages vs 99+ (sufficient for primary use). Faster Whisper rejected (CPU-only, can't use NPU). Both SenseVoice and Whisper-Small to be tested in Phase 0 for final confirmation. |
@@ -2207,7 +2205,7 @@ data/
 | DD-026 | Provider-managed context — no central Context Manager | 2026-02-27 | Each provider knows its own context window limits. The agent framework passes full conversation to the provider; the provider handles truncation if needed. Eliminates artificial token budget scaling that was over-engineering for the multi-provider design (DD-022). Local NPU still effectively limited by 4K practical window; cloud providers use their natural capacity. |
 | DD-027 | Tool Development Pipeline | 2026-02-27 | Structured lifecycle for tool creation: Specify (requirements YAML) → Develop (LLM-generated or human-written code) → Review (static analysis, sandbox test, security scan) → Approve (Tier 3 human approval) → Deploy (registered in tool registry). Tools remain in "draft" state until approved. Unapproved tools can be tested in sandbox but cannot affect real systems. |
 | DD-028 | Conversation context assembly and memory system | 2026-02-27 | Context Assembler builds prompts in priority order: system prompt → current request → tools → auto-injected memories → rolling summary → recent turns → older history. Rolling summary (generated during TTS playback, hidden latency) maintains coherence on 4K local NPU. Six memory tiers (DD-039 added Knowledge Store): working (RAM, session), short-term (SQLite, conversation summaries), long-term (SQLite + sqlite-vec, atomic facts with embeddings), episodic (events), tool (filesystem). Post-session LLM extraction captures facts/events. Automatic semantic retrieval injects relevant memories into every prompt (~20-40ms, CPU-only embedding via all-MiniLM-L6-v2). Cloud providers get full history + memories; local NPU gets summary + recent turns + memories. Memory stripped from cloud calls unless `allow_sensitive_data` enabled. |
-| DD-029 | Qwen3-1.7B confirmed as primary LLM (4B rejected) | 2026-02-27 | Phase 0 measured on M.2 + Pi 5: Qwen3-1.7B uses 3,375 MiB CMM at 7.70 tok/s (2,047 max tokens). Qwen3-0.6B uses 2,011 MiB at 13.74 tok/s. Qwen3-4B uses 6.2 GB CMM at 3.65 tok/s (2,559 max tokens) — only 691 MB remaining, cannot co-reside with ANY other model. Qwen3-4B is not viable as primary (half the speed, less context, requires serial model swapping for every ASR/TTS call). Qwen3-4B noted as future hot-swap option for heavy local reasoning (requires Pulsar2 v4.2, not yet released). AXERA-TECH catalog (149+ models) provides additional options: Qwen3-VL-4B-GPTQ-Int4 as combined LLM+VLM hot-swap, DeepSeek-R1-Distill-Qwen-1.5B as alternative reasoning model. |
+| DD-029 | Qwen3-1.7B confirmed as primary LLM (4B rejected) | 2026-02-27 | **Superseded by DD-051 (Qwen3-VL-2B is now primary).** Phase 0 measured on M.2 + Pi 5: Qwen3-1.7B uses 3,375 MiB CMM at 7.70 tok/s (2,047 max tokens). Qwen3-0.6B uses 2,011 MiB at 13.74 tok/s. Qwen3-4B uses 6.2 GB CMM at 3.65 tok/s (2,559 max tokens) — only 691 MB remaining, cannot co-reside with ANY other model. Qwen3-4B is not viable as primary (half the speed, less context, requires serial model swapping for every ASR/TTS call). Qwen3-4B noted as future hot-swap option for heavy local reasoning (requires Pulsar2 v4.2, not yet released). AXERA-TECH catalog (149+ models) provides additional options: Qwen3-VL-4B-GPTQ-Int4 as combined LLM+VLM hot-swap, DeepSeek-R1-Distill-Qwen-1.5B as alternative reasoning model. |
 | DD-030 | Voice interaction lifecycle | 2026-03-01 | Complete user-facing interaction model. Session auto-starts on first button press, ends on 5-min idle or explicit farewell (regex-matched, zero LLM cost). Interruption: long-press stops TTS immediately, new push-to-talk interrupts and replaces (interrupted response marked as truncated in history — system tracks what was actually heard vs planned). ASR errors get spoken retry prompts, LLM failures retry then fallback to cloud, TTS failures fall back to LCD text. All state-changing actions get spoken confirmations. "What can you do?" served from pre-defined per-persona templates (zero LLM cost). System prompt persona "Cortex": concise, warm, honest about uncertainty, voice responses <50 tokens. Prompt templates versioned in `config/prompts/`. |
 | DD-031 | Streaming voice pipeline | 2026-03-01 | Sentence-boundary streaming TTS to achieve <5s time-to-first-audio despite 7.38 tok/s LLM speed. Sentence Detector buffers LLM tokens, flushes on sentence-ending punctuation (min 8, max 96 tokens matching Kokoro axmodel limit). TTS Queue synthesizes each sentence via Kokoro as it arrives (~200ms per short sentence at RTF 0.067). LLM and TTS co-resident on NPU — model multiplexing enables parallel generation and synthesis (Phase 0 verification required). Audio chunks played sequentially with 10ms crossfade. Metrics: TTFA, ASR latency, prefill latency, chunk latency, inter-chunk gap. Falls back to sequential mode if NPU multiplexing proves too slow. |
 | DD-032 | Utility tools, scheduling, and notification system | 2026-03-01 | 9 new cognitive tools: clock, timer_query, reminder_query, weather_query, calculator, unit_convert, dictionary_lookup, translate, list_query (pure Python where possible, zero LLM cost). 7 new action templates: timer_set/cancel, reminder_set/cancel, list CRUD (all Tier 1). Scheduling Service: SQLite-backed persistent timers and reminders (`data/schedules.db`), survives reboots, asyncio-based sub-second precision, reminder snooze (max 3). Notification system: 5 priority levels (P0 silent LCD badge → P4 interruptive TTS), delivery via LCD + LED + audio + TTS + web push. Notifications queued during active conversations (except P4). DND mode with quiet hours (P3→P1 during DND, P4 always delivers). |
@@ -2218,12 +2216,12 @@ data/
 | DD-037 | Wyoming protocol bridge | 2026-03-02 | Home Assistant's standard protocol for local voice satellites (JSONL over TCP). Cortex exposes SenseVoice as a Wyoming STT provider and Kokoro as a Wyoming TTS provider, enabling HA to use Cortex's NPU for voice processing. Optional satellite mode: HA orchestrates the Assist pipeline, Cortex provides audio I/O + local ASR/TTS. Python `wyoming` package (HA-maintained). Runs as optional systemd service alongside Cortex. Phase 5 alongside existing HA integration. |
 | DD-038 | Proactive intelligence engine | 2026-03-02 | System initiates interactions based on learned patterns rather than waiting for user input. Pattern detection from episodic memory + scheduling service + calendar. Time-of-day routines: morning briefing at learned wakeup time. Context-aware correlations: smart home events + reminders + calendar. Routine suggestions: "You check the weather every morning. Want me to include it automatically?" Scheduled idle-time "think" loop: single short LLM inference using `quick` profile (Qwen3-0.6B), zero cost when NPU is idle. Delivery via existing notification system (P1-P3 depending on urgency). Fully opt-in, configurable per-routine via web UI. Phase 4 (design), Phase 5 (implementation). |
 | DD-039 | Knowledge store & document RAG | 2026-03-02 | Sixth memory tier: ingested documents (manuals, references, personal notes, saved articles) chunked into ~200-token overlapping segments, embedded via same all-MiniLM-L6-v2 CPU pipeline, stored in sqlite-vec. `knowledge_search` cognitive tool (already defined) gets this as its real backend. With 4K context, RAG is MORE valuable than with large context windows — inject one high-relevance passage instead of hoping it fits. Ingestion: web UI upload or watched directory (`data/knowledge/`). Supported formats: txt, md, pdf, html. Capacity: configurable (default 100 documents). Phase 4. |
-| DD-040 | Power-aware operation profiles | 2026-03-02 | Four profiles: `mains` (full capability — Qwen3-1.7B, full polling, full brightness), `battery` (reduced — Qwen3-0.6B, half polling frequency, 50% brightness), `low_battery` (<15% — minimal polling, 30% brightness), `critical` (<5% — regex-only commands, no LLM inference, LCD text only). Auto-transition via Power Service ZeroMQ events based on PiSugar charging state. Model Router already supports profile switching (§4.3.5). Manual override via voice command. Phase 1 (design), Phase 2 (auto-switching implementation). |
+| DD-040 | Power-aware operation profiles | 2026-03-02 | Four profiles: `mains` (full capability — Qwen3-VL-2B, full polling, full brightness), `battery` (reduced — Qwen3-0.6B, half polling frequency, 50% brightness), `low_battery` (<15% — minimal polling, 30% brightness), `critical` (<5% — regex-only commands, no LLM inference, LCD text only). Auto-transition via Power Service ZeroMQ events based on PiSugar charging state. Model Router already supports profile switching (§4.3.5). Manual override via voice command. Phase 1 (design), Phase 2 (auto-switching implementation). |
 | DD-041 | NPU hardware abstraction | 2026-03-02 | NPU Service Protocol defined as Python `Protocol` class: `load_model`, `unload_model`, `infer`, `get_status`, `capabilities`. No AXCL-specific types at the interface level — all AXCL specifics isolated inside `AxclNpuService` implementation. Generic numpy array I/O for tensors. Phase 1: `MockNpuService` for off-Pi development and testing (canned responses, configurable latency). Future: `HailoNpuService` (Raspberry Pi AI HAT+ 2, Hailo-10H, 40 TOPS, 2.5W). Design discipline enforced from Phase 1 when writing the NPU Service. |
 | DD-042 | Web authentication & session management | 2026-03-02 | Phase 1-2: no auth on LAN (local network = trusted). Phase 3: bcrypt-hashed password + secure HTTP-only session cookie (set during setup wizard). Server-side sessions in SQLite. No JWT (overkill for single-user), no OAuth. Remote access: HTTPS required (Caddy reverse proxy), optional TOTP 2FA via pyotp. Persona mapping: authenticated session = Primary/Remote User, unauthenticated LAN = Household Member tier, Guest mode = manual toggle. API key auth for MCP/A2A server endpoints. |
 | DD-043 | Process & service architecture | 2026-03-02 | Single main process (`cortex-core.service`): Python asyncio/uvloop running FastAPI + agent framework + voice pipeline + scheduling + memory. Separate HAL processes: `cortex-npu.service` (AXCL runtime, requires dedicated process context), `cortex-audio.service` (ALSA), `cortex-display.service` (LCD + buttons + LEDs). Optional: `cortex-wyoming.service`. All IPC via ZeroMQ with JSON messages. Topic convention: `{service}.{event_type}`. gRPC/D-Bus rejected (DD-008 already chose ZeroMQ). |
 | DD-044 | Operational lifecycle (backup, update, migration) | 2026-03-02 | Deployment: `git clone` + `pip install -e .` in virtualenv, systemd units via `scripts/install-services.sh`. Updates: `scripts/update.sh` (git pull + pip install + restart). SQLite schema migration: numbered SQL files in `data/migrations/`, version check on startup (no Alembic — avoids SQLAlchemy dep). Backup: `scripts/backup.sh` archives `data/` + `config/` + `.env` (excludes `models/`). Restore: `scripts/restore.sh` with migration reconciliation. Logging: structlog JSON → stdout → systemd journal (journald handles rotation). |
-| DD-045 | FastVLM-0.5B replaces SmolVLM2-500M for vision | 2026-03-02 | Phase 0 testing: FastVLM-0.5B from AXERA-TECH catalog is dramatically better than SmolVLM2-500M. 6x faster image encoding than InternVL2.5-1B, competitive decode speed, excellent image descriptions in testing. 792 MiB CMM (vs estimated ~500MB for SmolVLM2). No C++ AXCL aarch64 binary — runs via Python pyaxengine on Pi host over PCIe. Total 4-model co-resident budget updated: ~4.95 GB with ~2.09 GB headroom (29.7%). DD-020 updated to reference FastVLM-0.5B. |
+| DD-045 | FastVLM-0.5B replaces SmolVLM2-500M for vision | 2026-03-02 | **Superseded by DD-051 (Qwen3-VL-2B provides built-in vision).** Phase 0 testing: FastVLM-0.5B from AXERA-TECH catalog is dramatically better than SmolVLM2-500M. 6x faster image encoding than InternVL2.5-1B, competitive decode speed, excellent image descriptions in testing. 792 MiB CMM (vs estimated ~500MB for SmolVLM2). No C++ AXCL aarch64 binary — runs via Python pyaxengine on Pi host over PCIe. Total 4-model co-resident budget updated: ~4.95 GB with ~2.09 GB headroom (29.7%). DD-020 updated to reference FastVLM-0.5B. |
 | DD-046 | Mixed NPU invocation architecture | 2026-03-02 | Phase 1 investigation confirmed heterogeneous model invocation: **LLM (Qwen3)** uses C++ binary (`main_api_axcl_aarch64`) with separate tokenizer HTTP server (`qwen3_tokenizer_uid.py` on port 12345) — 28 per-layer axmodels + post axmodel + embeddings. **ASR (SenseVoice)** uses pyaxengine `InferenceSession` directly — single axmodel, one-shot inference. **TTS (Kokoro)** uses pyaxengine — 3 axmodel parts + 1 ONNX CPU vocoder. **VLM (FastVLM)** uses pyaxengine via `InferManager` — loads per-layer axmodels, manages KV caches in numpy, runs prefill+decode. FastVLM's `InferManager` proves pure-Python autoregressive LLM inference via pyaxengine is possible (future optimization path for LLM, eliminating C++ binary + tokenizer server). Phase 1: subprocess wrapping for LLM (proven, fast), pyaxengine for ASR/TTS/VLM. **Session 19 update:** Binary on Pi is OLD ax-llm (proprietary API: `/api/chat`, `/api/generate`, `/api/reset`, `/api/stop`), NOT OpenAI-compatible. New `axllm serve` (GitHub branch `axllm`) is OpenAI-compatible with SSE streaming and integrated tokenizer — available as future upgrade (compile from source). LLMRunner adapted for old API; startup race condition (reset triggers generation) resolved with 3-phase `_wait_for_ready`. All 8 NPU hardware tests passing (Session 21: VLM tests added, module-scoped VLM fixture to avoid AXCL lifecycle corruption). |
 | DD-047 | 2,047 token hard limit confirmed | 2026-03-02 | Phase 1 investigation: Qwen3-1.7B max sequence length is 2,047 tokens, hard-baked into compiled axmodel files. Tokenizer reports `model_max_length: 131072` (tokenizer capacity, not axmodel limit). C++ binary strings show `prefill_max_kv_cache_num_grp`, `prefill_max_token_num` as baked constants. FastVLM InferManager defaults to `max_seq_len=2047`. Qwen3 `config.json` is 0 bytes (no runtime override). Changing requires Pulsar2 recompile of all 28 layer axmodels. **Impact on context assembly:** ~1,200 tokens for system prompt + recent turns, ~800 tokens for generation. Rolling summary (DD-028) critical for coherence within this budget. |
 | DD-048 | NPU multiplexing confirmed (~0ms switch) | 2026-03-02 | Phase 1 investigation: co-resident models can be loaded and inferred concurrently via pyaxengine with negligible context-switch overhead. Tested 10 rounds alternating SenseVoice (avg 128.6ms) and Kokoro (avg 18.6ms) — switch overhead ~0ms. Confirms streaming voice pipeline (DD-031) is feasible: LLM generates sentence N+1 while TTS synthesizes sentence N. Sequential fallback mode no longer needed as primary path. |
@@ -2231,5 +2229,5 @@ data/
 | DD-050 | Script-based tools (progressive disclosure) | 2026-03-03 | Inspired by Anthropic's Claude Skills architecture: tools can be defined as **self-contained folders** (`TOOL.yaml` + `scripts/` + optional `references/`) rather than requiring compiled Python classes. YAML defines schema (name, description, parameters, permission tier), optional `triggers` (regex patterns for zero-LLM routing via IntentRouter), and optional `keywords` (for pre-filtering when tool library exceeds token budget). Scripts provide deterministic execution. Three-level progressive disclosure for 2,047-token budget: (1) short description always in context (~30-50 tokens), (2) full instructions injected only when tool is selected (~100-200 tokens), (3) reference docs available but never in LLM context. Three routing paths: regex trigger match (0 tokens), keyword pre-filter + LLM (200-400 tokens), full LLM selection (400-800 tokens). Key insight: "code is deterministic; language interpretation isn't" — offloading validation and formatting to scripts saves tokens and improves reliability. Auto-discovery: ToolRegistry scans `tools/*/TOOL.yaml` at startup + hot-reload. Script tools restricted to Tier 0-1 until bubblewrap sandboxing (Phase 4). Complements MCP (connectivity) with workflow knowledge (how to orchestrate multi-step tool sequences). Phase 3: script tool loader in ToolRegistry + YAML workflow templates for MCP tool orchestration. Phase 4: user-created script tools via tool development pipeline. |
 | DD-051 | Qwen3-VL-2B replaces Qwen3-1.7B + FastVLM-0.5B | 2026-03-04 | **Migration:** Replaced two models (Qwen3-1.7B text-only LLM + FastVLM-0.5B vision stub) with one unified Qwen3-VL-2B-Instruct-GPTQ-Int4 vision-language model from AXERA-TECH. **Rationale:** 1.3x faster (~10 vs 7.70 tok/s measured), 2,396 MiB memory savings (1,771 vs 3,375+792), built-in vision, same 2,047 max tokens, OpenAI-compatible API via `axllm serve` binary (no separate tokenizer server). **New binary:** `axllm serve <model_dir>` — compiled from source (`axllm` branch of AXERA-TECH/ax-llm), default port 8080. Requires `config.json` in model dir with `tokenizer_type: "Qwen3VL"`, axmodel template paths, and embedding config. No pre-built binary available. Build: `cmake -DBUILD_AXCL=ON .. && make -j4` on Pi. **API:** OpenAI `/v1/chat/completions` with SSE streaming, health check via `GET /v1/models`. Replaces old `main_api_axcl_aarch64` + tokenizer server. **VLMRunner:** `src/cortex/hal/npu/runners/vlm.py` — subprocess management, text-only and vision inference, SSE stream parsing with incremental think-tag stripping (`_safe_clean()` holds back incomplete `<think>` blocks). **Measured on hardware:** 1,771 MiB CMM, ~10 tok/s, max_token_len 2047, ~45s model load, 50°C under load. **Memory budget:** 1,771 + 251 + 232 = 2,254 MiB (32% of 7,040 MiB, 68% headroom). **Qwen3.5 rejected:** Gated Delta Network + MoE architecture not supported by AX8850 NPU / Pulsar2 compiler. Qwen3-VL-4B evaluated but too large (5,734 MiB, only 7.0 tok/s). Old LLMRunner (`llm.py`) preserved for backward compatibility with Qwen3-0.6B/1.7B. **AXCL lifecycle constraint (Session 21):** Repeated axllm start/stop cycles corrupt AXCL kernel module state (exit 255, "thread hasn't binded any context yet"). VLM must load first and stay alive for service lifetime — CortexService loads VLM before ASR/TTS. VLMRunner includes crash detection in `_wait_for_ready()` (checks subprocess exit code, reports stderr immediately). See `docs/guides/phase-0-hardware-setup.md` §0.8 for full build + config instructions. |
 
-*Document version: 0.1.24 — Session 21: AXCL lifecycle constraint documented (DD-051 addendum). Repeated axllm start/stop corrupts kernel module state — VLM must load first and stay alive. VLMRunner crash detection, module-scoped VLM test fixture. 8/8 hardware tests, 765 unit tests passing.*
+*Document version: 0.1.25 — Session 21: Scope doc body updated for DD-051 migration (Qwen3-1.7B + FastVLM → Qwen3-VL-2B throughout). Model table, power profiles, layer diagram, provider examples, Model Router, streaming pipeline, memory budget all updated to reflect unified VLM. DD-005/020/029/040/045 marked superseded. 8/8 hardware tests, 765 unit tests passing.*
 *Status: DRAFT*

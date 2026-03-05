@@ -60,7 +60,7 @@ alternative to Python handler classes, inspired by Anthropic's Claude Skills arc
 ## Conventions
 - Update `context/project-context.md` when making significant design decisions
 - Design decisions use IDs: DD-NNN with date and rationale
-- Scope doc version bumps on changes (currently v0.1.24)
+- Scope doc version bumps on changes (currently v0.1.25)
 - Hardware metrics go in `docs/guides/phase-0-hardware-setup.md` completion checklist
 - Models stored in `models/` (gitignored), runtime data in `data/` (gitignored)
 - No secrets in config files — use `.env` (gitignored)
