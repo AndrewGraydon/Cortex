@@ -200,7 +200,8 @@ class TestMultiModelHardware:
         assert isinstance(tts_result.data, np.ndarray)
 
         status = await npu.get_status()
-        assert len(status.models_loaded) == 2
+        assert "sensevoice" in status.models_loaded
+        assert "kokoro" in status.models_loaded
 
     async def test_full_pipeline_cycle(
         self, npu: AxclNpuService, vlm_handle: ModelHandle | None
