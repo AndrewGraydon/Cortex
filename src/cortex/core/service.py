@@ -137,9 +137,10 @@ class CortexService:
     async def _load_models(self) -> None:
         """Pre-load all NPU models.
 
-        Loading order matters: VLM (axllm serve subprocess) must initialize
-        AXCL before pyaxengine models (ASR, TTS) to avoid device context
-        conflicts on the NPU.
+        VLM loads first: axllm serve subprocess takes ~45s to start and
+        should initialize AXCL before pyaxengine models. Repeated axllm
+        start/stop cycles can corrupt AXCL kernel module state, so the
+        VLM stays loaded for the lifetime of the service.
         """
         logger.info("Loading models...")
 
@@ -147,7 +148,7 @@ class CortexService:
         llm_path = self._models_dir / "Qwen3-VL-2B"
         tts_path = self._models_dir / "Kokoro"
 
-        # VLM first: axllm serve must init AXCL before pyaxengine models
+        # VLM first: slowest to load (~45s), avoids AXCL init conflicts
         self._llm_handle = await self._npu.load_model("qwen3-vl-2b", llm_path)
         logger.info("VLM model loaded", model="qwen3-vl-2b")
 

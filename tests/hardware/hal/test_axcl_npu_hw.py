@@ -6,6 +6,10 @@ Or: pytest -m hardware tests/hardware/
 Note: The axengine NPU engine (axclrtEngineInit) is process-global and can only
 be initialized once. The npu fixture is module-scoped so all tests share one
 AxclNpuService instance, avoiding re-initialization failures.
+
+The VLM (axllm serve subprocess) is also module-scoped because repeated
+start/stop cycles corrupt AXCL kernel module state. The subprocess starts
+once and stays alive for all VLM and multi-model tests.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ import numpy as np
 import pytest
 
 from cortex.hal.npu.axcl import AxclNpuService
-from cortex.hal.types import InferenceInputs
+from cortex.hal.types import InferenceInputs, ModelHandle
 
 # Standard model paths on Pi
 MODELS_DIR = Path.home() / "models"
@@ -33,8 +37,9 @@ pytestmark = pytest.mark.hardware
 async def npu() -> AsyncGenerator[AxclNpuService, Any]:
     """Module-scoped NPU service — avoids axclrtEngineInit re-initialization.
 
-    All tests share one AxclNpuService instance. Models are cleaned up
-    between tests by the _cleanup_models autouse fixture.
+    All tests share one AxclNpuService instance. Non-VLM models are cleaned up
+    between tests by the _cleanup_models autouse fixture. VLM stays loaded
+    for the entire module (see vlm_handle fixture).
     """
     service = AxclNpuService(
         config={
@@ -50,12 +55,34 @@ async def npu() -> AsyncGenerator[AxclNpuService, Any]:
     await service.shutdown()
 
 
+@pytest.fixture(scope="module")
+async def vlm_handle(npu: AxclNpuService) -> AsyncGenerator[ModelHandle | None, Any]:
+    """Module-scoped VLM — axllm serve starts once for all tests.
+
+    The axllm subprocess must not be repeatedly started/stopped because
+    this corrupts AXCL kernel module device state (exit code 255,
+    "thread hasn't binded any context yet"). Keeping one axllm instance
+    alive for the entire module avoids this.
+    """
+    if not QWEN3_VL_DIR.exists():
+        yield None
+        return
+    handle = await npu.load_model("qwen3-vl-2b", QWEN3_VL_DIR)
+    yield handle
+    await npu.unload_model(handle)
+
+
 @pytest.fixture(autouse=True)
 async def _cleanup_models(npu: AxclNpuService) -> AsyncGenerator[None, Any]:
-    """Unload all models after each test to avoid state leaking between tests."""
+    """Unload non-VLM models after each test.
+
+    VLM is module-scoped and managed by the vlm_handle fixture.
+    Only ASR and TTS models are cleaned up between tests.
+    """
     yield
-    # Unload any models left loaded by the test
     for model_id in list(npu._runners.keys()):
+        if model_id == "qwen3-vl-2b":
+            continue  # module-scoped, handled by vlm_handle fixture
         handle = npu._handles.get(model_id)
         if handle:
             await npu.unload_model(handle)
@@ -90,40 +117,43 @@ class TestASRHardware:
 
 
 class TestVLMHardware:
-    async def test_qwen3_vl_load_and_infer(self, npu: AxclNpuService) -> None:
-        """Load Qwen3-VL-2B and generate a text response."""
-        if not QWEN3_VL_DIR.exists():
+    async def test_qwen3_vl_load_and_infer(
+        self, npu: AxclNpuService, vlm_handle: ModelHandle | None
+    ) -> None:
+        """Qwen3-VL-2B generates a text response."""
+        if vlm_handle is None:
             pytest.skip("Qwen3-VL-2B model not found")
 
-        handle = await npu.load_model("qwen3-vl-2b", QWEN3_VL_DIR)
-        assert handle.model_id == "qwen3-vl-2b"
+        assert vlm_handle.model_id == "qwen3-vl-2b"
 
-        result = await npu.infer(handle, InferenceInputs(data="What is 2+2?"))
+        result = await npu.infer(vlm_handle, InferenceInputs(data="What is 2+2?"))
         assert isinstance(result.data, str)
         assert len(result.data) > 0
         assert result.metadata.get("finish_reason") == "stop"
 
-    async def test_qwen3_vl_streaming(self, npu: AxclNpuService) -> None:
+    async def test_qwen3_vl_streaming(
+        self, npu: AxclNpuService, vlm_handle: ModelHandle | None
+    ) -> None:
         """Stream tokens from Qwen3-VL-2B."""
-        if not QWEN3_VL_DIR.exists():
+        if vlm_handle is None:
             pytest.skip("Qwen3-VL-2B model not found")
 
-        handle = await npu.load_model("qwen3-vl-2b", QWEN3_VL_DIR)
         chunks: list[str] = []
-        async for output in npu.infer_stream(handle, InferenceInputs(data="Say hello")):
+        async for output in npu.infer_stream(vlm_handle, InferenceInputs(data="Say hello")):
             chunks.append(str(output.data))
 
         assert len(chunks) > 0
         full_text = "".join(chunks)
         assert len(full_text) > 0
 
-    async def test_qwen3_vl_think_tag_stripping(self, npu: AxclNpuService) -> None:
+    async def test_qwen3_vl_think_tag_stripping(
+        self, npu: AxclNpuService, vlm_handle: ModelHandle | None
+    ) -> None:
         """Verify think tags are stripped from Qwen3-VL-2B output."""
-        if not QWEN3_VL_DIR.exists():
+        if vlm_handle is None:
             pytest.skip("Qwen3-VL-2B model not found")
 
-        handle = await npu.load_model("qwen3-vl-2b", QWEN3_VL_DIR)
-        result = await npu.infer(handle, InferenceInputs(data="What is 2+2? Be brief."))
+        result = await npu.infer(vlm_handle, InferenceInputs(data="What is 2+2? Be brief."))
         # Output should not contain think tags (VLMRunner strips them)
         assert "<think>" not in str(result.data)
         assert "</think>" not in str(result.data)
@@ -172,18 +202,19 @@ class TestMultiModelHardware:
         status = await npu.get_status()
         assert len(status.models_loaded) == 2
 
-    async def test_full_pipeline_cycle(self, npu: AxclNpuService) -> None:
+    async def test_full_pipeline_cycle(
+        self, npu: AxclNpuService, vlm_handle: ModelHandle | None
+    ) -> None:
         """Full ASR → VLM → TTS cycle on real hardware.
 
-        Loading order: VLM first — axllm serve must init AXCL before
-        pyaxengine models (ASR, TTS) to avoid device context conflicts.
+        VLM is module-scoped (already loaded). ASR and TTS are loaded fresh.
         """
-        for d in [SENSEVOICE_DIR, QWEN3_VL_DIR, KOKORO_DIR]:
+        if vlm_handle is None:
+            pytest.skip("Qwen3-VL-2B model not found")
+        for d in [SENSEVOICE_DIR, KOKORO_DIR]:
             if not d.exists():
                 pytest.skip(f"Model not found: {d}")
 
-        # VLM first: axllm serve must init AXCL before pyaxengine models
-        llm_handle = await npu.load_model("qwen3-vl-2b", QWEN3_VL_DIR)
         asr_handle = await npu.load_model("sensevoice", SENSEVOICE_DIR)
         tts_handle = await npu.load_model("kokoro", KOKORO_DIR)
 
@@ -192,7 +223,7 @@ class TestMultiModelHardware:
         await npu.infer(asr_handle, InferenceInputs(data=audio_in))
 
         # LLM: generate response
-        llm_result = await npu.infer(llm_handle, InferenceInputs(data="Say hello in one sentence."))
+        llm_result = await npu.infer(vlm_handle, InferenceInputs(data="Say hello in one sentence."))
         assert len(str(llm_result.data)) > 0
 
         # TTS: synthesize
