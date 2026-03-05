@@ -122,6 +122,9 @@ class VLMRunner:
                 await self._proc.wait()
         self._proc = None
 
+        # Brief delay for OS to release the port before any restart
+        await asyncio.sleep(0.5)
+
         self._loaded = False
         self._memory_mb = 0
 
@@ -307,7 +310,7 @@ class VLMRunner:
 
         await self._wait_for_ready(
             f"http://127.0.0.1:{self._api_port}",
-            timeout=120.0,
+            timeout=180.0,
         )
 
     @staticmethod
@@ -341,12 +344,22 @@ class VLMRunner:
         """Poll GET /v1/models until the server is ready.
 
         Also captures the model name from the response for use in API requests.
+        Detects subprocess crashes early to avoid waiting the full timeout.
         """
         deadline = asyncio.get_event_loop().time() + timeout
         url = f"{base_url}/v1/models"
 
         async with httpx.AsyncClient() as client:
             while asyncio.get_event_loop().time() < deadline:
+                # Detect subprocess crash — fail fast with stderr
+                if self._proc and self._proc.returncode is not None:
+                    stderr = ""
+                    if self._proc.stderr:
+                        stderr_bytes = await self._proc.stderr.read()
+                        stderr = stderr_bytes.decode(errors="replace")[-500:]
+                    msg = f"axllm exited with code {self._proc.returncode}: {stderr}"
+                    raise RuntimeError(msg)
+
                 try:
                     resp = await client.get(url, timeout=2.0)
                     if resp.status_code == 200:
