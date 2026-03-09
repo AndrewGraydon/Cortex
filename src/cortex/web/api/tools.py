@@ -43,8 +43,13 @@ async def list_tools(request: Request) -> dict[str, Any]:
             "description": tool.description,
             "tier": tool.permission_tier,
         }
-        # Script tools have extra metadata
-        if hasattr(tool, "triggers"):
+        # Determine tool type from registry source or attributes
+        source = registry.get_source(name)
+        if source == "mcp":
+            tool_info["type"] = "mcp"
+            tool_info["server"] = getattr(tool, "server_name", "unknown")
+            tool_info["enabled"] = True
+        elif hasattr(tool, "triggers"):
             tool_info["type"] = "script"
             tool_info["triggers"] = tool.triggers
             tool_info["keywords"] = tool.keywords
@@ -72,6 +77,20 @@ async def reload_tools(request: Request) -> dict[str, Any]:
 
     new_tools = discover_script_tools(tools_dir)
     for tool in new_tools:
-        registry.register(tool)
+        registry.register(tool, source="script")
 
-    return {"reloaded": len(new_tools), "total": len(registry)}
+    # Also re-discover MCP tools if client manager is available
+    mcp_count = 0
+    mcp_client = services.get("mcp_client")
+    if mcp_client is not None:
+        mcp_tools = await mcp_client.discover_all_tools()
+        for tool in mcp_tools:
+            registry.register(tool, source="mcp")
+            mcp_count += 1
+
+    return {
+        "reloaded": len(new_tools) + mcp_count,
+        "script_tools": len(new_tools),
+        "mcp_tools": mcp_count,
+        "total": len(registry),
+    }

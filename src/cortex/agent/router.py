@@ -127,6 +127,61 @@ BUILTIN_PATTERNS = [
         tool_hint="memory_save",
         extract_groups=True,
     ),
+    # Calendar query
+    IntentPattern(
+        "calendar_query",
+        IntentType.UTILITY,
+        [
+            r"what'?s\s+(?:on\s+)?my\s+calendar",
+            r"(?:show|list|check|view)\s+(?:me\s+)?my\s+(?:upcoming\s+)?(?:events|appointments|meetings|calendar|schedule)",
+            r"(?:do\s+)?i\s+have\s+(?:any\s+)?(?:events|appointments|meetings)\s+(?:today|tomorrow|this\s+week)",
+            r"what\s+(?:do\s+)?i\s+have\s+(?:coming\s+)?up",
+            r"(?:any|my)\s+(?:upcoming\s+)?(?:events|appointments|meetings)",
+        ],
+        tool_hint="calendar_query",
+    ),
+    # Calendar create
+    IntentPattern(
+        "calendar_create",
+        IntentType.UTILITY,
+        [
+            r"(?:schedule|create|add|book|set\s+up)\s+(?:an?\s+)?(?:meeting|event|appointment)",
+            r"(?:put|add)\s+(?:something\s+)?(?:on|to)\s+(?:my\s+)?calendar",
+        ],
+        tool_hint="calendar_create",
+    ),
+    # Email query
+    IntentPattern(
+        "email_query",
+        IntentType.UTILITY,
+        [
+            r"(?:check|show|list|read)\s+(?:my\s+)?(?:email|inbox|mail)",
+            r"(?:any|do\s+i\s+have)\s+(?:new\s+)?(?:emails?|messages?|mail)",
+            r"(?:unread|new)\s+(?:emails?|messages?|mail)",
+        ],
+        tool_hint="email_query",
+    ),
+    # Email send
+    IntentPattern(
+        "email_send",
+        IntentType.UTILITY,
+        [
+            r"(?:send|write|compose)\s+(?:an?\s+)?(?:email|message|mail)",
+            r"(?:email|mail)\s+(?:to\s+)?\S+@\S+",
+        ],
+        tool_hint="email_send",
+    ),
+    # Notification send
+    IntentPattern(
+        "notification_send",
+        IntentType.UTILITY,
+        [
+            r"(?:send|push)\s+(?:a\s+)?notification",
+            r"notify\s+(?:me|my\s+phone)",
+            r"(?:send|push)\s+(?:an?\s+)?(?:message|alert)\s+to\s+(?:my\s+)?(?:phone|device)",
+        ],
+        tool_hint="notification_send_external",
+    ),
 ]
 
 

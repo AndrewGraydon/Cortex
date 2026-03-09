@@ -18,14 +18,20 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from cortex.config import CortexConfig, load_config
+from cortex.web.api.a2a import router as a2a_router
 from cortex.web.api.approvals import router as approvals_router
 from cortex.web.api.auth_routes import router as auth_router
+from cortex.web.api.calendar import router as calendar_router
 from cortex.web.api.chat import router as chat_router
 from cortex.web.api.dashboard import router as dashboard_router
 from cortex.web.api.health import router as health_router
+from cortex.web.api.knowledge import router as knowledge_router
+from cortex.web.api.network_security import router as network_security_router
 from cortex.web.api.notifications import router as notifications_router
+from cortex.web.api.power import router as power_router
 from cortex.web.api.security import router as security_router
 from cortex.web.api.settings import router as settings_router
+from cortex.web.api.tool_pipeline import router as tool_pipeline_router
 from cortex.web.api.tools import router as tools_router
 from cortex.web.dependencies import init_services
 from cortex.web.middleware import AuthMiddleware
@@ -99,6 +105,12 @@ def create_app(
     app.include_router(tools_router)
     app.include_router(settings_router)
     app.include_router(security_router)
+    app.include_router(calendar_router)
+    app.include_router(knowledge_router)
+    app.include_router(a2a_router)
+    app.include_router(tool_pipeline_router)
+    app.include_router(power_router)
+    app.include_router(network_security_router)
 
     # Index route
     @app.get("/", response_class=HTMLResponse)

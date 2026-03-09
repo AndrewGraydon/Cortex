@@ -25,7 +25,7 @@ from cortex.memory.types import (
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -67,7 +67,9 @@ class SqliteMemoryStore:
         self._db: aiosqlite.Connection | None = None
 
     async def start(self) -> None:
-        """Open database and create tables."""
+        """Open database, create tables, and run migrations."""
+        from cortex.memory.migration import run_migrations
+
         self._db = await aiosqlite.connect(self._db_path)
         await self._db.executescript(CREATE_TABLES)
         # Set schema version if not present
@@ -76,9 +78,11 @@ class SqliteMemoryStore:
         if row and row[0] == 0:
             await self._db.execute(
                 "INSERT INTO schema_version (version) VALUES (?)",
-                (SCHEMA_VERSION,),
+                (1,),
             )
-        await self._db.commit()
+            await self._db.commit()
+        # Run any pending migrations (v1 → v2, etc.)
+        await run_migrations(self._db, SCHEMA_VERSION)
 
     async def stop(self) -> None:
         """Close the database connection."""

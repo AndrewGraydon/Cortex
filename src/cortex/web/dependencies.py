@@ -6,6 +6,7 @@ from typing import Any
 
 from cortex.agent.health import HealthMonitor
 from cortex.config import CortexConfig
+from cortex.external.protocols import ExternalServiceManager
 
 
 class ServiceContainer:
@@ -42,6 +43,12 @@ def init_services(config: CortexConfig, **kwargs: Any) -> ServiceContainer:
         npu=kwargs.get("npu"),
         poll_interval_s=config.health.npu_poll_interval,
     )
+    # External service manager (Phase 3b)
+    ext_manager = kwargs.pop("external_service_manager", None)
+    if ext_manager is None:
+        ext_manager = ExternalServiceManager()
+    container.set("external_service_manager", ext_manager)
+
     for key, value in kwargs.items():
         container.set(key, value)
     _container = container

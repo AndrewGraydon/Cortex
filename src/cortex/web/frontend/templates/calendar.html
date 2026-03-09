@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}Calendar — Cortex{% endblock %}
+
+{% block content %}
+<div class="flex justify-between items-center mb-6">
+    <h1 class="text-2xl font-bold">Calendar</h1>
+    <button class="btn btn-primary btn-sm" onclick="showCreateModal()">New Event</button>
+</div>
+
+<!-- Date range selector -->
+<div class="flex gap-2 mb-4">
+    <button class="btn btn-sm" onclick="loadEvents(1)" id="btn-1d">Today</button>
+    <button class="btn btn-sm btn-active" onclick="loadEvents(7)" id="btn-7d">7 Days</button>
+    <button class="btn btn-sm" onclick="loadEvents(30)" id="btn-30d">30 Days</button>
+</div>
+
+<!-- Events list -->
+<div id="events-container">
+    <div class="flex justify-center py-8">
+        <span class="loading loading-spinner loading-md"></span>
+    </div>
+</div>
+
+<!-- Create event modal -->
+<dialog id="create-modal" class="modal">
+    <div class="modal-box">
+        <h3 class="text-lg font-bold mb-4">New Event</h3>
+        <form id="create-form" onsubmit="createEvent(event)">
+            <div class="form-control mb-3">
+                <label class="label"><span class="label-text">Title</span></label>
+                <input type="text" name="summary" class="input input-bordered" required />
+            </div>
+            <div class="form-control mb-3">
+                <label class="label"><span class="label-text">Start</span></label>
+                <input type="datetime-local" name="start" class="input input-bordered" required />
+            </div>
+            <div class="form-control mb-3">
+                <label class="label"><span class="label-text">Duration (minutes)</span></label>
+                <input type="number" name="duration_minutes" class="input input-bordered" value="60" min="1" max="1440" />
+            </div>
+            <div class="form-control mb-3">
+                <label class="label"><span class="label-text">Location</span></label>
+                <input type="text" name="location" class="input input-bordered" />
+            </div>
+            <div class="form-control mb-3">
+                <label class="label"><span class="label-text">Description</span></label>
+                <textarea name="description" class="textarea textarea-bordered" rows="2"></textarea>
+            </div>
+            <div class="modal-action">
+                <button type="button" class="btn" onclick="document.getElementById('create-modal').close()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create</button>
+            </div>
+        </form>
+    </div>
+    <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentDays = 7;
+
+function loadEvents(days) {
+    currentDays = days || 7;
+    // Update active button
+    document.querySelectorAll('[id^="btn-"]').forEach(b => b.classList.remove('btn-active'));
+    const btn = document.getElementById('btn-' + days + 'd');
+    if (btn) btn.classList.add('btn-active');
+
+    const container = document.getElementById('events-container');
+    container.innerHTML = '<div class="flex justify-center py-8"><span class="loading loading-spinner loading-md"></span></div>';
+
+    fetch('/api/calendar/events?days_ahead=' + days)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.configured) {
+                container.innerHTML = '<div class="alert alert-warning">Calendar not configured. Set up CalDAV in Settings.</div>';
+                return;
+            }
+            if (data.error) {
+                container.innerHTML = '<div class="alert alert-error">' + data.error + '</div>';
+                return;
+            }
+            if (!data.events || data.events.length === 0) {
+                container.innerHTML = '<div class="text-base-content/50 py-4">No events in the next ' + days + ' days.</div>';
+                return;
+            }
+            container.innerHTML = data.events.map(renderEvent).join('');
+        })
+        .catch(err => {
+            container.innerHTML = '<div class="alert alert-error">Failed to load events.</div>';
+            console.error('Calendar load error:', err);
+        });
+}
+
+function renderEvent(event) {
+    const start = new Date(event.start);
+    const end = new Date(event.end);
+    let timeStr;
+    if (event.all_day) {
+        timeStr = start.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }) + ' (all day)';
+    } else {
+        timeStr = start.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+            + ' ' + start.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+            + ' – ' + end.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    }
+    const locationHtml = event.location ? '<div class="text-sm text-base-content/60">' + event.location + '</div>' : '';
+    const descHtml = event.description ? '<div class="text-sm text-base-content/50 mt-1">' + event.description + '</div>' : '';
+    return `
+        <div class="card bg-base-100 shadow-sm mb-2">
+            <div class="card-body p-4">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <h3 class="font-semibold">${event.summary}</h3>
+                        <div class="text-sm text-base-content/70">${timeStr}</div>
+                        ${locationHtml}
+                        ${descHtml}
+                    </div>
+                    <button class="btn btn-ghost btn-xs" onclick="deleteEvent('${event.uid}')">✕</button>
+                </div>
+            </div>
+        </div>`;
+}
+
+function showCreateModal() {
+    document.getElementById('create-form').reset();
+    document.getElementById('create-modal').showModal();
+}
+
+function createEvent(e) {
+    e.preventDefault();
+    const form = document.getElementById('create-form');
+    const data = Object.fromEntries(new FormData(form));
+    data.duration_minutes = parseInt(data.duration_minutes) || 60;
+
+    fetch('/api/calendar/events', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data),
+    })
+    .then(r => r.json())
+    .then(result => {
+        if (result.success) {
+            document.getElementById('create-modal').close();
+            loadEvents(currentDays);
+        } else {
+            alert(result.error || 'Failed to create event');
+        }
+    })
+    .catch(err => {
+        alert('Failed to create event');
+        console.error('Create event error:', err);
+    });
+}
+
+function deleteEvent(uid) {
+    if (!confirm('Delete this event?')) return;
+    fetch('/api/calendar/events/' + uid, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(result => {
+            if (result.success) loadEvents(currentDays);
+        })
+        .catch(err => console.error('Delete error:', err));
+}
+
+// Load events on page load
+loadEvents(7);
+</script>
+{% endblock %}

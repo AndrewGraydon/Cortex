@@ -27,12 +27,15 @@ class ScriptTool:
     - Arguments passed as JSON on stdin
     - Script writes JSON result to stdout: {"display_text": "...", "data": ...}
     - Exit code 0 = success, non-zero = failure
+
+    For Tier 2+ tools, execution is routed through BubblewrapSandbox if provided.
     """
 
     def __init__(
         self,
         tool_dir: Path,
         manifest: dict[str, Any],
+        sandbox: Any | None = None,
     ) -> None:
         self._tool_dir = tool_dir
         self._manifest = manifest
@@ -45,6 +48,7 @@ class ScriptTool:
         self._keywords: list[str] = manifest.get("keywords", [])
         self._parameters: dict[str, Any] = manifest.get("parameters", {})
         self._enabled: bool = True
+        self._sandbox = sandbox
 
     @property
     def name(self) -> str:
@@ -99,8 +103,13 @@ class ScriptTool:
             },
         }
 
+    @property
+    def uses_sandbox(self) -> bool:
+        """Whether this tool should be sandboxed (Tier 2+ with sandbox available)."""
+        return self._permission_tier >= 2 and self._sandbox is not None
+
     async def execute(self, arguments: dict[str, Any]) -> ToolResult:
-        """Execute the script tool via subprocess."""
+        """Execute the script tool via subprocess (sandboxed for Tier 2+)."""
         if not self._enabled:
             return ToolResult(
                 tool_name=self._name,
@@ -115,6 +124,66 @@ class ScriptTool:
                 error=f"Entry point not found: {self._entry_point}",
             )
 
+        # Route Tier 2+ tools through sandbox if available
+        if self.uses_sandbox:
+            return await self._execute_sandboxed(arguments)
+
+        return await self._execute_direct(arguments)
+
+    async def _execute_sandboxed(self, arguments: dict[str, Any]) -> ToolResult:
+        """Execute via bubblewrap sandbox."""
+        assert self._sandbox is not None  # guarded by uses_sandbox check
+        try:
+            input_data = json.dumps(arguments).encode()
+            result = await self._sandbox.execute(
+                cmd=[sys.executable, str(self._entry_point)],
+                cwd=str(self._tool_dir),
+                stdin_data=input_data,
+                timeout=self._timeout,
+            )
+
+            if result.timed_out:
+                return ToolResult(
+                    tool_name=self._name,
+                    success=False,
+                    error=f"Sandboxed script timed out after {self._timeout}s",
+                )
+
+            if result.exit_code != 0:
+                error_text = result.stderr.strip() or f"Exit code {result.exit_code}"
+                return ToolResult(
+                    tool_name=self._name,
+                    success=False,
+                    error=error_text,
+                )
+
+            output = result.stdout.strip()
+            if output:
+                result_data = json.loads(output)
+                return ToolResult(
+                    tool_name=self._name,
+                    success=True,
+                    data=result_data.get("data"),
+                    display_text=result_data.get("display_text", ""),
+                )
+            return ToolResult(tool_name=self._name, success=True)
+
+        except json.JSONDecodeError as e:
+            return ToolResult(
+                tool_name=self._name,
+                success=False,
+                error=f"Invalid JSON output: {e}",
+            )
+        except Exception as e:
+            logger.exception("Sandboxed script tool %s failed", self._name)
+            return ToolResult(
+                tool_name=self._name,
+                success=False,
+                error=str(e),
+            )
+
+    async def _execute_direct(self, arguments: dict[str, Any]) -> ToolResult:
+        """Execute directly via subprocess (no sandbox)."""
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,

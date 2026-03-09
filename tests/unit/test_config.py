@@ -115,6 +115,145 @@ class TestConfigSerialization:
         assert restored == cfg
 
 
+class TestExternalServicesConfig:
+    """Test external services config models (Phase 3b)."""
+
+    def test_default_external_services(self) -> None:
+        cfg = CortexConfig()
+        assert cfg.external_services.calendar.enabled is False
+        assert cfg.external_services.calendar.url == ""
+        assert cfg.external_services.messaging.enabled is False
+        assert cfg.external_services.messaging.server == "https://ntfy.sh"
+        assert cfg.external_services.messaging.default_topic == "cortex"
+        assert cfg.external_services.email_imap.enabled is False
+        assert cfg.external_services.email_imap.port == 993
+        assert cfg.external_services.email_imap.use_ssl is True
+        assert cfg.external_services.email_smtp.enabled is False
+        assert cfg.external_services.email_smtp.port == 587
+        assert cfg.external_services.email_smtp.use_tls is True
+
+    def test_load_external_services_from_yaml(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "cortex.yaml"
+        config_file.write_text(
+            dedent("""\
+                external_services:
+                  calendar:
+                    enabled: true
+                    url: "http://localhost:5232"
+                    username: "andrew"
+                  messaging:
+                    enabled: true
+                    server: "http://ntfy.local"
+                    default_topic: "home"
+                  email_imap:
+                    enabled: true
+                    server: "imap.example.com"
+                    port: 993
+                    username: "user@example.com"
+                  email_smtp:
+                    enabled: true
+                    server: "smtp.example.com"
+                    port: 465
+                    use_tls: false
+                    from_address: "user@example.com"
+            """)
+        )
+        cfg = load_config(config_file)
+        assert cfg.external_services.calendar.enabled is True
+        assert cfg.external_services.calendar.url == "http://localhost:5232"
+        assert cfg.external_services.calendar.username == "andrew"
+        assert cfg.external_services.messaging.enabled is True
+        assert cfg.external_services.messaging.server == "http://ntfy.local"
+        assert cfg.external_services.messaging.default_topic == "home"
+        assert cfg.external_services.email_imap.enabled is True
+        assert cfg.external_services.email_imap.server == "imap.example.com"
+        assert cfg.external_services.email_smtp.enabled is True
+        assert cfg.external_services.email_smtp.port == 465
+        assert cfg.external_services.email_smtp.use_tls is False
+        assert cfg.external_services.email_smtp.from_address == "user@example.com"
+
+
+class TestMcpConfig:
+    """Test MCP configuration models (Phase 3b)."""
+
+    def test_default_mcp_config(self) -> None:
+        cfg = CortexConfig()
+        assert cfg.agent.mcp.client.servers_config == "config/mcp_servers.yaml"
+        assert cfg.agent.mcp.client.connect_timeout == 5
+        assert cfg.agent.mcp.client.default_permission_tier == 2
+        assert cfg.agent.mcp.server.enabled is False
+        assert cfg.agent.mcp.server.expose_cognitive_tools is True
+        assert cfg.agent.mcp.server.expose_action_templates is True
+
+    def test_load_mcp_from_yaml(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "cortex.yaml"
+        config_file.write_text(
+            dedent("""\
+                agent:
+                  mcp:
+                    client:
+                      servers_config: "config/custom_mcp.yaml"
+                      connect_timeout: 10
+                      default_permission_tier: 1
+                    server:
+                      enabled: true
+                      expose_cognitive_tools: true
+                      expose_action_templates: false
+            """)
+        )
+        cfg = load_config(config_file)
+        assert cfg.agent.mcp.client.servers_config == "config/custom_mcp.yaml"
+        assert cfg.agent.mcp.client.connect_timeout == 10
+        assert cfg.agent.mcp.client.default_permission_tier == 1
+        assert cfg.agent.mcp.server.enabled is True
+        assert cfg.agent.mcp.server.expose_action_templates is False
+
+
+class TestA2aConfig:
+    """Test A2A configuration models (Phase 3b)."""
+
+    def test_default_a2a_config(self) -> None:
+        cfg = CortexConfig()
+        assert cfg.agent.a2a.client.enabled is False
+        assert cfg.agent.a2a.client.discovery_urls == []
+        assert cfg.agent.a2a.client.connect_timeout == 5
+        assert cfg.agent.a2a.client.default_permission_tier == 2
+        assert cfg.agent.a2a.server.enabled is False
+        assert cfg.agent.a2a.server.expose_agents == [
+            "general",
+            "home",
+            "research",
+            "pim",
+            "planner",
+        ]
+
+    def test_load_a2a_from_yaml(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "cortex.yaml"
+        config_file.write_text(
+            dedent("""\
+                agent:
+                  a2a:
+                    client:
+                      enabled: true
+                      discovery_urls:
+                        - "http://agent1.local/.well-known/agent.json"
+                        - "http://agent2.local/.well-known/agent.json"
+                      connect_timeout: 10
+                    server:
+                      enabled: true
+                      expose_agents:
+                        - general
+                        - pim
+            """)
+        )
+        cfg = load_config(config_file)
+        assert cfg.agent.a2a.client.enabled is True
+        assert len(cfg.agent.a2a.client.discovery_urls) == 2
+        assert cfg.agent.a2a.client.connect_timeout == 10
+        assert cfg.agent.a2a.server.enabled is True
+        assert cfg.agent.a2a.server.expose_agents == ["general", "pim"]
+
+
 class TestFindConfigFile:
     """Test config file discovery."""
 

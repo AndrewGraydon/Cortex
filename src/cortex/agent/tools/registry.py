@@ -21,15 +21,22 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, Any] = {}
+        self._sources: dict[str, str] = {}  # tool_name -> source type
 
-    def register(self, tool: Any) -> None:
+    def register(self, tool: Any, source: str = "python") -> None:
         """Register a tool. Tool must have name, description, permission_tier,
-        get_schema(), and execute() attributes."""
+        get_schema(), and execute() attributes.
+
+        Args:
+            tool: Tool instance satisfying the Tool protocol.
+            source: Tool source type — "python", "script", or "mcp".
+        """
         name = tool.name
         if name in self._tools:
             logger.warning("Overwriting tool registration: %s", name)
         self._tools[name] = tool
-        logger.debug("Registered tool: %s (tier %d)", name, tool.permission_tier)
+        self._sources[name] = source
+        logger.debug("Registered tool: %s (tier %d, source %s)", name, tool.permission_tier, source)
 
     def get(self, name: str) -> Any | None:
         """Get a tool by name."""
@@ -88,6 +95,14 @@ class ToolRegistry:
     def tool_names(self) -> list[str]:
         """List of registered tool names."""
         return list(self._tools.keys())
+
+    def get_source(self, name: str) -> str:
+        """Get the source type for a tool ('python', 'script', or 'mcp')."""
+        return self._sources.get(name, "python")
+
+    def get_by_source(self, source: str) -> list[str]:
+        """Get all tool names from a specific source."""
+        return [n for n, s in self._sources.items() if s == source]
 
     def __len__(self) -> int:
         return len(self._tools)

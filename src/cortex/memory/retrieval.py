@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from cortex.memory.embedding_protocol import EmbeddingService
 from cortex.memory.types import SearchResult
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ class MemoryRetriever:
     def __init__(
         self,
         store: Any,  # MemoryStore protocol
-        embedder: Any,  # EmbeddingService protocol
+        embedder: EmbeddingService,
         top_k: int = 3,
         threshold: float = 0.3,
     ) -> None:

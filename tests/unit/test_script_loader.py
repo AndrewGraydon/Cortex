@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cortex.agent.tools.script_loader import load_script_tool
+from cortex.agent.tools.script_loader import ScriptTool, load_script_tool
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -202,3 +204,113 @@ class TestScriptToolExecution:
         result = await tool.execute({})
         assert result.success is False
         assert "timed out" in (result.error or "")
+
+
+# ---------------------------------------------------------------------------
+# Sandbox integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestScriptToolSandboxRouting:
+    """Tests for sandbox routing based on permission tier."""
+
+    def _make_tool(self, tmp_path: Path, tier: int, sandbox: Any | None = None) -> ScriptTool:
+        """Create a script tool with a given tier and sandbox."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir(exist_ok=True)
+
+        import yaml
+
+        manifest = {
+            "name": f"tier{tier}-tool",
+            "entry_point": "scripts/run.py",
+            "permission_tier": tier,
+            "timeout_seconds": 5,
+        }
+        (tmp_path / "TOOL.yaml").write_text(yaml.dump(manifest))
+        (scripts_dir / "run.py").write_text(
+            "import json, sys\n"
+            "data = json.loads(sys.stdin.read())\n"
+            'json.dump({"display_text": "ok", "data": data}, sys.stdout)\n'
+        )
+
+        return ScriptTool(tmp_path, manifest, sandbox=sandbox)
+
+    def test_tier0_no_sandbox(self, tmp_path: Path) -> None:
+        tool = self._make_tool(tmp_path, tier=0)
+        assert tool.uses_sandbox is False
+
+    def test_tier1_no_sandbox(self, tmp_path: Path) -> None:
+        tool = self._make_tool(tmp_path, tier=1)
+        assert tool.uses_sandbox is False
+
+    def test_tier2_no_sandbox_object(self, tmp_path: Path) -> None:
+        tool = self._make_tool(tmp_path, tier=2, sandbox=None)
+        assert tool.uses_sandbox is False
+
+    def test_tier2_with_sandbox(self, tmp_path: Path) -> None:
+        mock_sandbox = MagicMock()
+        tool = self._make_tool(tmp_path, tier=2, sandbox=mock_sandbox)
+        assert tool.uses_sandbox is True
+
+    def test_tier3_with_sandbox(self, tmp_path: Path) -> None:
+        mock_sandbox = MagicMock()
+        tool = self._make_tool(tmp_path, tier=3, sandbox=mock_sandbox)
+        assert tool.uses_sandbox is True
+
+    def test_tier0_with_sandbox_still_direct(self, tmp_path: Path) -> None:
+        mock_sandbox = MagicMock()
+        tool = self._make_tool(tmp_path, tier=0, sandbox=mock_sandbox)
+        assert tool.uses_sandbox is False
+
+    def test_tier1_with_sandbox_still_direct(self, tmp_path: Path) -> None:
+        mock_sandbox = MagicMock()
+        tool = self._make_tool(tmp_path, tier=1, sandbox=mock_sandbox)
+        assert tool.uses_sandbox is False
+
+    async def test_tier2_executes_via_sandbox(self, tmp_path: Path) -> None:
+        mock_sandbox = AsyncMock()
+        mock_sandbox.execute.return_value = MagicMock(
+            stdout='{"display_text": "sandboxed", "data": {}}',
+            stderr="",
+            exit_code=0,
+            timed_out=False,
+        )
+        tool = self._make_tool(tmp_path, tier=2, sandbox=mock_sandbox)
+        result = await tool.execute({})
+        assert result.success is True
+        assert result.display_text == "sandboxed"
+        mock_sandbox.execute.assert_called_once()
+
+    async def test_tier0_executes_directly(self, tmp_path: Path) -> None:
+        mock_sandbox = AsyncMock()
+        tool = self._make_tool(tmp_path, tier=0, sandbox=mock_sandbox)
+        result = await tool.execute({"input": "test"})
+        assert result.success is True
+        mock_sandbox.execute.assert_not_called()
+
+    async def test_sandbox_timeout(self, tmp_path: Path) -> None:
+        mock_sandbox = AsyncMock()
+        mock_sandbox.execute.return_value = MagicMock(
+            stdout="",
+            stderr="",
+            exit_code=0,
+            timed_out=True,
+        )
+        tool = self._make_tool(tmp_path, tier=2, sandbox=mock_sandbox)
+        result = await tool.execute({})
+        assert result.success is False
+        assert "timed out" in (result.error or "")
+
+    async def test_sandbox_nonzero_exit(self, tmp_path: Path) -> None:
+        mock_sandbox = AsyncMock()
+        mock_sandbox.execute.return_value = MagicMock(
+            stdout="",
+            stderr="permission denied",
+            exit_code=1,
+            timed_out=False,
+        )
+        tool = self._make_tool(tmp_path, tier=2, sandbox=mock_sandbox)
+        result = await tool.execute({})
+        assert result.success is False
+        assert "permission denied" in (result.error or "")

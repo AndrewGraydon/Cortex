@@ -12,6 +12,10 @@ import hashlib
 import numpy as np
 from numpy.typing import NDArray
 
+from cortex.memory.embedding_protocol import EmbeddingService
+
+__all__ = ["EMBEDDING_DIM", "EmbeddingService", "MockEmbeddingService"]
+
 EMBEDDING_DIM = 384
 
 

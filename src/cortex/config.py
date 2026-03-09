@@ -131,7 +131,58 @@ class ReasoningConfig(BaseModel):
     profiles: dict[str, Any] = Field(default_factory=dict)
 
 
+# --- MCP Config ---
+
+
+class McpClientConfig(BaseModel):
+    servers_config: str = "config/mcp_servers.yaml"
+    connect_timeout: int = 5
+    default_permission_tier: int = 2
+
+
+class McpServerConfig(BaseModel):
+    enabled: bool = False
+    expose_cognitive_tools: bool = True
+    expose_action_templates: bool = True
+
+
+class McpConfig(BaseModel):
+    client: McpClientConfig = Field(default_factory=McpClientConfig)
+    server: McpServerConfig = Field(default_factory=McpServerConfig)
+
+
+# --- A2A Config ---
+
+
+class A2aClientConfig(BaseModel):
+    enabled: bool = False
+    discovery_urls: list[str] = Field(default_factory=list)
+    connect_timeout: int = 5
+    default_permission_tier: int = 2
+
+
+class A2aServerConfig(BaseModel):
+    enabled: bool = False
+    expose_agents: list[str] = Field(
+        default_factory=lambda: ["general", "home", "research", "pim", "planner"]
+    )
+
+
+class A2aConfig(BaseModel):
+    client: A2aClientConfig = Field(default_factory=A2aClientConfig)
+    server: A2aServerConfig = Field(default_factory=A2aServerConfig)
+
+
 # --- Agent Config ---
+
+
+class ToolPipelineConfig(BaseModel):
+    enabled: bool = True
+    user_tools_dir: str = "tools/user-created"
+    promotion_threshold: int = 10
+    max_user_tools: int = 50
+    catalog_db_path: str = "data/tool_catalog.db"
+    promotion_db_path: str = "data/tool_promotion.db"
 
 
 class AgentConfig(BaseModel):
@@ -139,6 +190,9 @@ class AgentConfig(BaseModel):
     max_tool_iterations: int = 2
     confidence_threshold: float = 0.6
     actions_dir: str = "config/actions"
+    mcp: McpConfig = Field(default_factory=McpConfig)
+    a2a: A2aConfig = Field(default_factory=A2aConfig)
+    tool_pipeline: ToolPipelineConfig = Field(default_factory=ToolPipelineConfig)
 
 
 # --- Security Config ---
@@ -155,9 +209,19 @@ class ApprovalConfig(BaseModel):
     default_deny_on_timeout: bool = True
 
 
+class SandboxSecurityConfig(BaseModel):
+    enabled: bool = True
+    bwrap_path: str = "/usr/bin/bwrap"
+    scratch_dir: str = "data/sandbox"
+    max_memory_mb: int = 256
+    max_cpu_seconds: int = 30
+    network_default: bool = False
+
+
 class SecurityConfig(BaseModel):
     audit: AuditConfig = Field(default_factory=AuditConfig)
     approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
+    sandbox: SandboxSecurityConfig = Field(default_factory=SandboxSecurityConfig)
 
 
 # --- Memory Config ---
@@ -176,12 +240,37 @@ class LongTermMemoryConfig(BaseModel):
     embedding_dimensions: int = 384
 
 
+class EmbeddingConfig(BaseModel):
+    model_path: str = "models/all-MiniLM-L6-v2"
+    use_mock: bool = False
+
+
+class EpisodicConfig(BaseModel):
+    enabled: bool = True
+    max_events: int = 50000
+    retention_days: int = 365
+
+
 class MemoryConfig(BaseModel):
     db_path: str = "data/memory.db"
     extraction_idle_timeout: int = 300
     regex_patterns: bool = True
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    episodic: EpisodicConfig = Field(default_factory=EpisodicConfig)
     short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
     long_term: LongTermMemoryConfig = Field(default_factory=LongTermMemoryConfig)
+
+
+# --- Knowledge Config ---
+
+
+class KnowledgeConfig(BaseModel):
+    db_path: str = "data/knowledge.db"
+    watched_dir: str = ""
+    max_documents: int = 100
+    chunk_size_tokens: int = 200
+    chunk_overlap_tokens: int = 50
+    similarity_threshold: float = 0.3
 
 
 # --- Scheduling Config ---
@@ -244,6 +333,77 @@ class SystemConfig(BaseModel):
     timezone: str = "UTC"
 
 
+# --- External Services Config ---
+
+
+class CalDAVConfig(BaseModel):
+    enabled: bool = False
+    url: str = ""
+    username: str = ""
+    # password from .env: CALDAV_PASSWORD
+
+
+class NtfyConfig(BaseModel):
+    enabled: bool = False
+    server: str = "https://ntfy.sh"
+    default_topic: str = "cortex"
+    # token from .env: NTFY_TOKEN
+
+
+class ImapConfig(BaseModel):
+    enabled: bool = False
+    server: str = ""
+    port: int = 993
+    use_ssl: bool = True
+    username: str = ""
+    # password from .env: EMAIL_PASSWORD
+
+
+class SmtpConfig(BaseModel):
+    enabled: bool = False
+    server: str = ""
+    port: int = 587
+    use_tls: bool = True
+    username: str = ""
+    from_address: str = ""
+    # password from .env: SMTP_PASSWORD
+
+
+class ExternalServicesConfig(BaseModel):
+    calendar: CalDAVConfig = Field(default_factory=CalDAVConfig)
+    messaging: NtfyConfig = Field(default_factory=NtfyConfig)
+    email_imap: ImapConfig = Field(default_factory=ImapConfig)
+    email_smtp: SmtpConfig = Field(default_factory=SmtpConfig)
+
+
+# --- Power Config ---
+
+
+class PowerConfig(BaseModel):
+    auto_switch: bool = True
+    low_battery_threshold: float = 20.0
+    critical_threshold: float = 5.0
+
+
+# --- Proactive Config ---
+
+
+class ProactiveConfig(BaseModel):
+    enabled: bool = False
+    think_interval_seconds: float = 300.0
+    min_pattern_occurrences: int = 5
+    morning_briefing_enabled: bool = False
+
+
+# --- Network Security Config ---
+
+
+class NetworkSecurityConfig(BaseModel):
+    enabled: bool = False
+    default_policy: str = "deny"
+    allowlist: list[str] = Field(default_factory=list)
+
+
 # --- Top-level Config ---
 
 
@@ -258,10 +418,15 @@ class CortexConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     scheduling: SchedulingConfig = Field(default_factory=SchedulingConfig)
     notifications: NotificationConfig = Field(default_factory=NotificationConfig)
     health: HealthConfig = Field(default_factory=HealthConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    external_services: ExternalServicesConfig = Field(default_factory=ExternalServicesConfig)
+    power: PowerConfig = Field(default_factory=PowerConfig)
+    network_security: NetworkSecurityConfig = Field(default_factory=NetworkSecurityConfig)
+    proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
 
 
 # --- Config search paths (in priority order) ---

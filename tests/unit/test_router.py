@@ -133,6 +133,163 @@ class TestMemorySaveRouting:
         assert "Andrew" in d.intent_match.extracted.get("fact", "")
 
 
+class TestCalendarQueryRouting:
+    def test_whats_on_my_calendar(self) -> None:
+        router = IntentRouter()
+        d = router.route("what's on my calendar")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match is not None
+        assert d.intent_match.intent_id == "calendar_query"
+        assert d.tool_hints == ["calendar_query"]
+
+    def test_show_my_events(self) -> None:
+        router = IntentRouter()
+        d = router.route("show me my upcoming events")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "calendar_query"
+
+    def test_check_my_calendar(self) -> None:
+        router = IntentRouter()
+        d = router.route("check my calendar")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "calendar_query"
+
+    def test_do_i_have_meetings_today(self) -> None:
+        router = IntentRouter()
+        d = router.route("do I have any meetings today")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "calendar_query"
+
+    def test_what_do_i_have_coming_up(self) -> None:
+        router = IntentRouter()
+        d = router.route("what do I have coming up")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "calendar_query"
+
+    def test_any_upcoming_appointments(self) -> None:
+        router = IntentRouter()
+        d = router.route("any upcoming appointments")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "calendar_query"
+
+    def test_list_my_schedule(self) -> None:
+        router = IntentRouter()
+        d = router.route("list my schedule")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "calendar_query"
+
+
+class TestCalendarCreateRouting:
+    def test_schedule_a_meeting(self) -> None:
+        router = IntentRouter()
+        d = router.route("schedule a meeting")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match is not None
+        assert d.intent_match.intent_id == "calendar_create"
+        assert d.tool_hints == ["calendar_create"]
+
+    def test_create_an_event(self) -> None:
+        router = IntentRouter()
+        d = router.route("create an event")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "calendar_create"
+
+    def test_add_to_my_calendar(self) -> None:
+        router = IntentRouter()
+        d = router.route("add something to my calendar")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "calendar_create"
+
+    def test_book_an_appointment(self) -> None:
+        router = IntentRouter()
+        d = router.route("book an appointment")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "calendar_create"
+
+    def test_set_up_a_meeting(self) -> None:
+        router = IntentRouter()
+        d = router.route("set up a meeting")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "calendar_create"
+
+
+class TestEmailQueryRouting:
+    def test_check_my_email(self) -> None:
+        router = IntentRouter()
+        d = router.route("check my email")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match is not None
+        assert d.intent_match.intent_id == "email_query"
+        assert d.tool_hints == ["email_query"]
+
+    def test_any_new_emails(self) -> None:
+        router = IntentRouter()
+        d = router.route("any new emails")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "email_query"
+
+    def test_show_my_inbox(self) -> None:
+        router = IntentRouter()
+        d = router.route("show my inbox")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "email_query"
+
+    def test_unread_messages(self) -> None:
+        router = IntentRouter()
+        d = router.route("unread messages")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "email_query"
+
+
+class TestEmailSendRouting:
+    def test_send_an_email(self) -> None:
+        router = IntentRouter()
+        d = router.route("send an email")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match is not None
+        assert d.intent_match.intent_id == "email_send"
+
+    def test_compose_email(self) -> None:
+        router = IntentRouter()
+        d = router.route("compose an email")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "email_send"
+
+    def test_write_a_message(self) -> None:
+        router = IntentRouter()
+        d = router.route("write a message")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "email_send"
+
+
+class TestNotificationRouting:
+    def test_send_notification(self) -> None:
+        router = IntentRouter()
+        d = router.route("send a notification")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match is not None
+        assert d.intent_match.intent_id == "notification_send"
+        assert d.tool_hints == ["notification_send_external"]
+
+    def test_push_notification(self) -> None:
+        router = IntentRouter()
+        d = router.route("push a notification")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "notification_send"
+
+    def test_notify_my_phone(self) -> None:
+        router = IntentRouter()
+        d = router.route("notify my phone")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "notification_send"
+
+    def test_send_alert_to_phone(self) -> None:
+        router = IntentRouter()
+        d = router.route("send an alert to my phone")
+        assert d.intent_type == IntentType.UTILITY
+        assert d.intent_match.intent_id == "notification_send"
+
+
 class TestLLMFallback:
     def test_general_question(self) -> None:
         router = IntentRouter()

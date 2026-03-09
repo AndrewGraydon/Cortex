@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
 from cortex.agent.tools.registry import ToolRegistry
 from cortex.agent.types import ToolCall, ToolResult
@@ -24,10 +25,12 @@ class ActionEngine:
         registry: ToolRegistry,
         permissions: PermissionEngine | None = None,
         audit_log: SqliteAuditLog | None = None,
+        promotion_tracker: Any | None = None,
     ) -> None:
         self._registry = registry
         self._permissions = permissions
         self._audit_log = audit_log
+        self._promotion_tracker = promotion_tracker
 
     async def execute(
         self,
@@ -64,6 +67,15 @@ class ActionEngine:
         # Log to audit
         approval_status = "auto" if tier.value <= 1 else "approved"
         await self._log_audit(call, result, tier, source, t0, approval_status)
+
+        # Track execution for user-created tool promotion
+        if self._promotion_tracker is not None:
+            source_type = self._registry.get_source(call.name)
+            if source_type == "script":
+                try:
+                    await self._promotion_tracker.record_execution(call.name, result.success)
+                except Exception:
+                    logger.exception("Failed to record promotion stats for %s", call.name)
 
         return result
 

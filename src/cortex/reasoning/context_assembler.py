@@ -38,6 +38,7 @@ class ContextAssembler:
         user_message: str,
         tools: list[ToolSchema] | None = None,
         memories: list[str] | None = None,
+        knowledge_passage: str | None = None,
         summary: str | None = None,
         history: list[dict[str, str]] | None = None,
     ) -> AssembledPrompt:
@@ -47,6 +48,7 @@ class ContextAssembler:
             user_message: The current user utterance (P2).
             tools: Tool schemas to include (P3).
             memories: Retrieved memory strings (P4).
+            knowledge_passage: RAG passage from knowledge store (P4.5).
             summary: Conversation summary (P5).
             history: Recent conversation turns as role/content dicts (P6-P7).
 
@@ -78,8 +80,16 @@ class ContextAssembler:
         has_history = False
         turns_included = 0
 
-        # --- Build middle sections (P5-P6, budget permitting) ---
+        # --- Build middle sections (P4.5-P7, budget permitting) ---
         middle_parts: list[str] = []
+
+        # P4.5: Knowledge passage (RAG result)
+        if knowledge_passage:
+            knowledge_block = f"\n{knowledge_passage}"
+            knowledge_tokens = estimate_tokens(knowledge_block)
+            if used_tokens + knowledge_tokens <= max_tokens - self._budget.user_message_tokens:
+                middle_parts.append(knowledge_block)
+                used_tokens += knowledge_tokens
 
         # P5: Conversation summary
         if summary:

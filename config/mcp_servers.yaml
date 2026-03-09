@@ -1,0 +1,32 @@
+# MCP Server Definitions
+#
+# Define external MCP servers that Cortex should connect to.
+# Tools from these servers are discovered automatically and registered
+# with the Cortex tool registry using the tool_prefix.
+#
+# Example:
+#
+# servers:
+#   - name: homeassistant
+#     url: "http://homeassistant.local:8123/mcp"
+#     transport: streamable_http
+#     timeout_seconds: 5
+#     tool_prefix: ha
+#     default_permission_tier: 2
+#     enabled: true
+#     tool_overrides:
+#       get_light_state:
+#         permission_tier: 0
+#         triggers:
+#           - 'lights?\s+(?:status|state)'
+#         keywords: [light, lights, lamp]
+#
+#   - name: n8n
+#     url: "http://nas.local:5678/mcp"
+#     transport: streamable_http
+#     timeout_seconds: 15
+#     tool_prefix: n8n
+#     default_permission_tier: 2
+#     enabled: true
+
+servers: []

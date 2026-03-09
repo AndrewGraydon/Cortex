@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-03-05 (Session 21)
+# Last updated: 2026-03-09 (Session 22)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -99,6 +99,8 @@ Building an agentic local LLM voice assistant on Raspberry Pi 5 with M5Stack LLM
 | DD-048 | NPU multiplexing confirmed (~0ms switch) | Co-resident models interleave with negligible overhead. Tested 10 rounds: SenseVoice 128.6ms + Kokoro 18.6ms alternating. Streaming pipeline (DD-031) confirmed feasible. |
 | DD-050 | Script-based tools (progressive disclosure) | Self-contained tool folders (TOOL.yaml + scripts/) as alternative to Python handler classes. 3-level progressive disclosure for 2,047-token budget. Scripts handle deterministic validation/formatting (saves tokens). Phase 3: loader + MCP workflow templates. Phase 4: user-created tools + bubblewrap sandbox. Inspired by Anthropic's Claude Skills architecture. |
 | DD-049 | Audio via sounddevice + ALSA default device | Capture: 16kHz mono via ALSA `default` device (plug→dsnoop handles stereo WM8960 hw). WM8960 hw requires 2-channel capture — do NOT use `hw:0,0` with channels=1. Playback: ALSA `default` (dmix resamples 24kHz→48kHz). DC offset removal in software (~300-600 ADC bias). Mixer: Capture=55, Boost=2(+20dB), ALC=OFF, HPF=on, NoiseGate=on. Verified with SenseVoice ASR: transcribes accurately at these levels (0.17s inference). |
+| DD-052 | KV cache compaction (Attention Matching) | MIT technique: 50x KV cache compression (1GB → ~20MB) with 0% accuracy loss. Three steps: reference queries, key selection (~2% retained), value fitting (OLS). Not actionable for our NPU (needs AXCL runtime support), but could enable 4K-8K context if AXERA adopts. Phase 5 tracking item. |
+| DD-053 | LLM-driven memory consolidation | Google's "Always On Memory Agent" — no vector DB, LLM reads/writes structured memory directly, 30-min consolidation cycles. Phase 5 hybrid approach: keep our embedding search for fast retrieval, add LLM-driven "dreaming" during idle time to synthesize higher-level insights from episodic events. Extends DD-038 proactive intelligence. |
 
 ## Architecture
 Seven-layer stack:
@@ -114,9 +116,10 @@ Seven-layer stack:
 - **Phase 0** — Hardware foundation (COMPLETE)
 - **Phase 1** — Voice loop (COMPLETE — all milestones 1.1-4.4, 121 tests passing)
 - **Phase 2** — Agent core (COMPLETE — all milestones 2.1-2.8, 487 tests passing, validated on Pi)
-- **Phase 3** — Web UI (NEXT)
-- **Phase 4** — Dynamic capabilities (tool pipeline, agent factory, long-term memory)
-- **Phase 5** — IoT integration (MQTT, Home Assistant)
+- **Phase 3a** — Web Foundation (COMPLETE — 736 tests, 7 milestones)
+- **Phase 3b** — External Services (COMPLETE — 1,084 tests, CalDAV, email, ntfy, MCP, A2A)
+- **Phase 4** — Dynamic Capabilities (COMPLETE — 1,524 tests, 7 milestones, 5 exit criteria met)
+- **Phase 5** — IoT integration, LLM-driven memory consolidation (DD-053), proactive LLM correlation (DD-038)
 - **Phase 6** — Hardening and polish
 
 ## Key Technical Findings
@@ -352,12 +355,23 @@ Cortex/
 
   **Result:** 8/8 NPU hardware tests passing (ASR load/infer, ASR memory, VLM load/infer, VLM streaming, VLM think-tag stripping, TTS load/infer, ASR+TTS co-resident, full ASR→VLM→TTS pipeline). 765 unit tests passing. Lint + mypy clean.
 
+- **Session 22 (2026-03-09):** Phase 4 — Dynamic Capabilities — COMPLETE. Continued from previous session (context recovered). Completed Milestone 4.7 (Proactive Intelligence + E2E):
+
+  Fixed E2E test suite ([test_phase4_e2e.py](tests/integration/test_phase4_e2e.py)) — API mismatches between tests and implementations: KnowledgeStore (no `embedder` param, takes `Document`/`DocumentChunk` objects, `search()` takes `NDArray`), SqliteMemoryStore (no `embedder` param, `save_fact()` takes `MemoryEntry`, `get_all_facts()` not `get_facts()`, `search()` returns `SearchResult` objects), EpisodicMemoryStore (needs `MIGRATION_V2` table creation, timestamps must share same weekday+hour for pattern grouping, `days_back=90` for weekly events).
+
+  All 5 exit criteria validated: EC#1 tool pipeline E2E, EC#2 sandboxed tool execution, EC#3 knowledge store ingest+retrieve, EC#4 semantic memory recall, EC#5 proactive pattern detection from episodic data. **1,524 tests passing** (unit + integration), lint + mypy clean.
+
+  Research: DD-052 (MIT Attention Matching — 50x KV cache compression, Phase 5 tracking), DD-053 (Google Always On Memory Agent — LLM-driven memory without vector DBs, Phase 5 hybrid approach: keep embedding search + add LLM "dreaming" consolidation during idle time).
+
+  Scope doc updated to v0.1.26.
+
 ### NEXT SESSION — Resume Here
-**Topic:** Phase 3b — External services, MCP server, A2A.
-- Phase 3b: External services, MCP server, A2A
-- External services: CalDAV calendar, IMAP/SMTP email, ntfy messaging (DD-035)
-- MCP server: expose Cortex tools to external clients (DD-019)
-- A2A protocol: client discovery + server Agent Card (DD-036)
+**Topic:** Phase 5 planning.
+- Phase 5 scope definition and milestone planning
+- IoT integration: MQTT, Home Assistant Wyoming protocol (DD-037)
+- LLM-driven memory consolidation during idle time (DD-053, extends DD-038)
+- Proactive intelligence LLM-based correlation (DD-038 Phase 5)
+- KV cache optimization tracking (DD-052, depends on AXERA ecosystem)
 - Browser voice input (getUserMedia + audio streaming)
 - HTTPS / Caddy / TOTP 2FA (deployment hardening)
 

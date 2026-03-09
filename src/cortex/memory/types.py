@@ -52,3 +52,25 @@ class SearchResult:
 
     entry: MemoryEntry
     similarity: float  # 0.0-1.0 cosine similarity
+
+
+class EventType(enum.Enum):
+    """Types of episodic events tracked for pattern detection."""
+
+    TOOL_USE = "tool_use"
+    QUERY_TOPIC = "query_topic"
+    ROUTINE_ACTION = "routine_action"
+    SESSION_START = "session_start"
+    SESSION_END = "session_end"
+
+
+@dataclass
+class EpisodicEvent:
+    """A timestamped event for episodic memory."""
+
+    id: str
+    event_type: EventType
+    content: str  # tool name, topic, or action description
+    timestamp: float = 0.0
+    session_id: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)

@@ -14,7 +14,7 @@ import re
 import time
 import uuid
 
-from cortex.memory.types import MemoryCategory, MemoryEntry
+from cortex.memory.types import EpisodicEvent, EventType, MemoryCategory, MemoryEntry
 
 logger = logging.getLogger(__name__)
 
@@ -151,3 +151,81 @@ class MemoryExtractor:
             return f"User routine: {fact}"
 
         return fact
+
+
+def extract_episodic_events(
+    tool_calls: list[dict[str, str]] | None = None,
+    user_messages: list[str] | None = None,
+    session_id: str | None = None,
+) -> list[EpisodicEvent]:
+    """Extract episodic events from an interaction.
+
+    Generates events for:
+    - Tool uses (one event per tool call)
+    - Query topics (simple keyword extraction from user messages)
+    """
+    events: list[EpisodicEvent] = []
+    now = time.time()
+
+    # Tool use events
+    if tool_calls:
+        for call in tool_calls:
+            tool_name = call.get("name", "unknown")
+            events.append(
+                EpisodicEvent(
+                    id=uuid.uuid4().hex[:16],
+                    event_type=EventType.TOOL_USE,
+                    content=tool_name,
+                    timestamp=now,
+                    session_id=session_id,
+                    metadata={"arguments": call.get("arguments", "")},
+                )
+            )
+
+    # Topic events from user messages
+    if user_messages:
+        topics = _extract_topics(user_messages)
+        for topic in topics:
+            events.append(
+                EpisodicEvent(
+                    id=uuid.uuid4().hex[:16],
+                    event_type=EventType.QUERY_TOPIC,
+                    content=topic,
+                    timestamp=now,
+                    session_id=session_id,
+                )
+            )
+
+    return events
+
+
+def _extract_topics(messages: list[str]) -> list[str]:
+    """Simple keyword-based topic extraction from user messages."""
+    topic_keywords = {
+        "weather",
+        "time",
+        "timer",
+        "alarm",
+        "reminder",
+        "calendar",
+        "email",
+        "news",
+        "music",
+        "light",
+        "temperature",
+        "schedule",
+        "recipe",
+        "math",
+        "calculate",
+        "search",
+        "help",
+    }
+    topics: list[str] = []
+    seen: set[str] = set()
+    for msg in messages:
+        words = {w.strip(".,!?;:'\"") for w in msg.lower().split()}
+        for keyword in topic_keywords:
+            if keyword in words and keyword not in seen:
+                topics.append(keyword)
+                seen.add(keyword)
+    return topics
