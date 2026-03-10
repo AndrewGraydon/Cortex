@@ -121,8 +121,8 @@ class CortexService:
             from cortex.hal.npu.axcl import AxclNpuService
 
             # AxclNpuService imports fine on macOS but needs AXCL kernel modules
-            if not Path("/dev/axcl").exists():
-                msg = "AXCL device not found (/dev/axcl)"
+            if not Path("/dev/axcl_host").exists():
+                msg = "AXCL device not found (/dev/axcl_host)"
                 raise RuntimeError(msg)  # noqa: TRY301
             self._npu = AxclNpuService()
             logger.info("NPU: using AxclNpuService")
