@@ -34,6 +34,7 @@ logger = structlog.get_logger()
 # Default model paths on Pi
 DEFAULT_MODELS_DIR = Path.home() / "models"
 DEFAULT_SYSTEM_PROMPT = (
+    "/no_think\n"
     "You are Cortex, a helpful voice assistant running locally on a Raspberry Pi. "
     "Be concise and friendly. Keep responses under 50 words when possible."
 )

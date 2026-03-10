@@ -93,7 +93,7 @@ class VLMRunner:
         self._model_path = model_path
         self._api_port = config.get("api_port", DEFAULT_API_PORT)
         self._memory_mb = config.get("memory_mb", 1771)
-        self._system_prompt = config.get("system_prompt", "You are a helpful assistant.")
+        self._system_prompt = config.get("system_prompt", "/no_think\nYou are a helpful assistant.")
 
         try:
             await self._start_axllm(model_path, config)
@@ -138,11 +138,14 @@ class VLMRunner:
         messages = self._build_messages(prompt, inputs.params)
         body = self._build_request_body(messages, inputs.params, stream=False)
 
+        logger.debug("VLM infer request: %d messages, last=%s", len(messages), messages[-1] if messages else "none")
+
         resp = await self._client.post("/v1/chat/completions", json=body)
         resp.raise_for_status()
         data = resp.json()
 
         content = data["choices"][0]["message"]["content"]
+        logger.debug("VLM raw response (%d chars): %.200s", len(content), content)
         content = self._strip_think_tags(content)
         finish_reason = data["choices"][0].get("finish_reason", "stop")
 
@@ -167,6 +170,8 @@ class VLMRunner:
         prompt = str(inputs.data) if inputs.data is not None else ""
         messages = self._build_messages(prompt, inputs.params)
         body = self._build_request_body(messages, inputs.params, stream=True)
+
+        logger.info("VLM stream request: %d messages, user=%s", len(messages), prompt[:100])
 
         queue: asyncio.Queue[InferenceOutputs | None] = asyncio.Queue()
 
