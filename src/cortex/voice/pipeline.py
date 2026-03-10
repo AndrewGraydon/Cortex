@@ -237,9 +237,14 @@ class VoicePipeline:
         await self.process_utterance(audio_data)
 
     async def _handle_long_press(self) -> None:
-        """Stop TTS playback (interruption)."""
-        await self._audio.stop_playback()
-        await self._display.set_state(DisplayState.IDLE)
+        """Long press — process recording if capturing, else stop playback."""
+        if self._audio.is_capturing:
+            # User held button >2s while speaking — process the recording
+            await self._handle_hold_end()
+        else:
+            # Long press during idle/playback — interrupt
+            await self._audio.stop_playback()
+            await self._display.set_state(DisplayState.IDLE)
 
     # --- Pipeline stages ---
 
