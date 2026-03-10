@@ -4,7 +4,7 @@ This is the main application process that:
 1. Initializes HAL services (real on Pi, mock fallback on other platforms)
 2. Pre-loads NPU models (VLM first to avoid AXCL lifecycle issues)
 3. Wires AgentProcessor + ContextAssembler for multi-turn conversations
-4. Runs the voice pipeline
+4. Runs the voice pipeline and web server concurrently
 5. Handles graceful shutdown
 """
 
@@ -21,6 +21,7 @@ import structlog
 from cortex.agent.processor import AgentProcessor
 from cortex.agent.router import IntentRouter
 from cortex.agent.tools.registry import ToolRegistry
+from cortex.config import CortexConfig
 from cortex.hal.audio.mock import MockAudioService
 from cortex.hal.display.mock import MockButtonService, MockDisplayService
 from cortex.hal.npu.mock import MockNpuService
@@ -50,11 +51,14 @@ class CortexService:
         mock: bool = True,
         models_dir: Path = DEFAULT_MODELS_DIR,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+        config: CortexConfig | None = None,
     ) -> None:
         self._mock = mock
         self._models_dir = models_dir
         self._system_prompt = system_prompt
+        self._config = config
         self._pipeline: VoicePipeline | None = None
+        self._processor: AgentProcessor | None = None
         self._running = False
 
         # HAL services
@@ -86,11 +90,12 @@ class CortexService:
 
         # Wire agent framework
         assembler = ContextAssembler()
-        processor = AgentProcessor(
+        self._processor = AgentProcessor(
             router=IntentRouter(),
             registry=ToolRegistry(),
             context_assembler=assembler,
         )
+        processor = self._processor
 
         # Create and configure pipeline
         self._pipeline = VoicePipeline(
@@ -172,13 +177,54 @@ class CortexService:
             logger.warning("Button: falling back to mock", reason=str(exc))
 
     async def run(self) -> None:
-        """Run the voice pipeline (blocks until stopped)."""
+        """Run the voice pipeline and web server (blocks until stopped)."""
         if not self._pipeline:
             msg = "Service not started"
             raise RuntimeError(msg)
 
         logger.info("Cortex voice pipeline running — waiting for button press")
-        await self._pipeline.run()
+
+        # Start web server alongside voice pipeline if config is available
+        if self._config and self._config.web.enabled:
+            web_task = asyncio.create_task(self._run_web_server())
+            try:
+                await self._pipeline.run()
+            finally:
+                web_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await web_task
+        else:
+            await self._pipeline.run()
+
+    async def _run_web_server(self) -> None:
+        """Start the FastAPI web server."""
+        import uvicorn
+
+        from cortex.web.app import create_app
+
+        web_cfg = self._config.web if self._config else None
+        host = web_cfg.host if web_cfg else "0.0.0.0"
+        port = web_cfg.port if web_cfg else 8000
+
+        app = create_app(
+            config=self._config,
+            enable_auth=False,  # Disable auth for local Pi usage
+            npu=self._npu,
+            llm_handle=self._llm_handle,
+            agent_processor=self._processor,
+        )
+
+        uvi_config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level="info",
+        )
+        server = uvicorn.Server(uvi_config)
+        # Prevent uvicorn from overriding our signal handlers (run_cortex handles SIGTERM/SIGINT)
+        server.capture_signals = contextlib.nullcontext  # type: ignore[assignment]
+        logger.info("Web server starting", host=host, port=port)
+        await server.serve()
 
     async def stop(self) -> None:
         """Graceful shutdown."""
@@ -253,6 +299,7 @@ async def run_cortex(
     mock: bool = True,
     models_dir: Path | None = None,
     system_prompt: str | None = None,
+    config: CortexConfig | None = None,
 ) -> None:
     """Main entry point for cortex-core service."""
     kwargs: dict[str, Any] = {"mock": mock}
@@ -260,6 +307,8 @@ async def run_cortex(
         kwargs["models_dir"] = models_dir
     if system_prompt is not None:
         kwargs["system_prompt"] = system_prompt
+    if config is not None:
+        kwargs["config"] = config
     service = CortexService(**kwargs)
 
     stop = asyncio.Event()

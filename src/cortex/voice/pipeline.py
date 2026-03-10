@@ -321,6 +321,11 @@ class VoicePipeline:
 
         metrics.llm_end_ts = _now_ms()
 
+        if full_response:
+            logger.info("LLM response (%d chars): %s", len(full_response), full_response[:200])
+        else:
+            logger.warning("LLM returned empty response for: %s", user_text)
+
         log_metrics = {
             "asr_ms": f"{metrics.asr_latency_ms:.0f}",
             "prefill_ms": f"{metrics.llm_prefill_ms:.0f}",
@@ -331,7 +336,11 @@ class VoicePipeline:
         return full_response
 
     async def _synthesize_and_play(self, text: str, metrics: LatencyMetrics) -> None:
-        """TTS a sentence and play it. Falls back to LCD text if TTS fails."""
+        """TTS a sentence and play it. Falls back to LCD text on any error.
+
+        Catches all exceptions to prevent TTS/playback errors from killing
+        the LLM stream (which would cause GeneratorExit and lost tokens).
+        """
         assert self._tts_handle is not None
 
         try:
@@ -339,32 +348,36 @@ class VoicePipeline:
                 self._tts_handle,
                 InferenceInputs(data=text),
             )
+
+            if metrics.tts_first_chunk_ts == 0.0:
+                metrics.tts_first_chunk_ts = _now_ms()
+
+            audio_array = result.data
+            if isinstance(audio_array, np.ndarray) and len(audio_array) > 0:
+                # Convert float32 to int16 for playback
+                samples = (audio_array * 32767).clip(-32768, 32767).astype(np.int16)
+
+                await self._display.set_state(DisplayState.SPEAKING, text)
+
+                if metrics.first_audio_ts == 0.0:
+                    metrics.first_audio_ts = _now_ms()
+
+                await self._audio.play(
+                    AudioData(
+                        samples=samples,
+                        sample_rate=result.metadata.get("sample_rate", 24000),
+                        format=AudioFormat.S16_LE,
+                    )
+                )
+            else:
+                # TTS returned empty audio — show text on LCD instead
+                logger.warning("TTS returned empty audio for: %s", text)
+                await self._display.set_state(DisplayState.SPEAKING, text)
+                await asyncio.sleep(max(1.0, len(text.split()) * 0.3))
         except Exception:
-            logger.warning("TTS failed, falling back to LCD text: %s", text)
+            logger.warning("TTS/playback failed, falling back to LCD: %s", text, exc_info=True)
             await self._display.set_state(DisplayState.SPEAKING, text)
             await asyncio.sleep(max(1.0, len(text.split()) * 0.3))
-            return
-
-        if metrics.tts_first_chunk_ts == 0.0:
-            metrics.tts_first_chunk_ts = _now_ms()
-
-        audio_array = result.data
-        if isinstance(audio_array, np.ndarray) and len(audio_array) > 0:
-            # Convert float32 to int16 for playback
-            samples = (audio_array * 32767).clip(-32768, 32767).astype(np.int16)
-
-            await self._display.set_state(DisplayState.SPEAKING, text)
-
-            if metrics.first_audio_ts == 0.0:
-                metrics.first_audio_ts = _now_ms()
-
-            await self._audio.play(
-                AudioData(
-                    samples=samples,
-                    sample_rate=result.metadata.get("sample_rate", 24000),
-                    format=AudioFormat.S16_LE,
-                )
-            )
 
     async def _speak(self, text: str, metrics: LatencyMetrics) -> None:
         """Synthesize and play a simple text response."""

@@ -56,7 +56,7 @@ def run(ctx: click.Context, mock: bool, models_dir: Path | None) -> None:
 
     from cortex.core.service import run_cortex
 
-    asyncio.run(run_cortex(mock=mock, models_dir=models_dir))
+    asyncio.run(run_cortex(mock=mock, models_dir=models_dir, config=cfg))
 
 
 @main.command()

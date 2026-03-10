@@ -151,7 +151,12 @@ class VLMRunner:
         )
 
     async def infer_stream(self, inputs: InferenceInputs) -> AsyncIterator[InferenceOutputs]:
-        """Stream tokens via POST /v1/chat/completions with SSE."""
+        """Stream tokens via POST /v1/chat/completions with SSE.
+
+        Uses explicit try/finally for response lifecycle instead of ``async with``
+        to prevent GeneratorExit from interrupting httpx stream cleanup when the
+        consumer finishes iterating or the generator is garbage-collected.
+        """
         self._check_loaded()
         assert self._client is not None
 
@@ -159,7 +164,11 @@ class VLMRunner:
         messages = self._build_messages(prompt, inputs.params)
         body = self._build_request_body(messages, inputs.params, stream=True)
 
-        async with self._client.stream("POST", "/v1/chat/completions", json=body) as resp:
+        resp = await self._client.send(
+            self._client.build_request("POST", "/v1/chat/completions", json=body),
+            stream=True,
+        )
+        try:
             resp.raise_for_status()
             buffer = ""
             emitted_len = 0
@@ -189,6 +198,8 @@ class VLMRunner:
                                 "finish_reason": finish_reason,
                             },
                         )
+        finally:
+            await resp.aclose()
 
     async def reset_context(self, system_prompt: str | None = None) -> None:
         """Reset conversation context.

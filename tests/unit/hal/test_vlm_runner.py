@@ -355,13 +355,11 @@ class TestSSEParsing:
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_resp.aiter_lines = mock_aiter_lines
-
-        mock_stream_cm = AsyncMock()
-        mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_resp.aclose = AsyncMock()
 
         mock_client = AsyncMock()
-        mock_client.stream = MagicMock(return_value=mock_stream_cm)
+        mock_client.build_request = MagicMock(return_value=MagicMock())
+        mock_client.send = AsyncMock(return_value=mock_resp)
         runner._client = mock_client
 
         chunks = []
@@ -371,6 +369,7 @@ class TestSSEParsing:
         full_text = "".join(chunks)
         assert full_text == "Hello world!"
         assert len(chunks) == 3
+        mock_resp.aclose.assert_awaited_once()
 
     async def test_stream_strips_think_tags(self) -> None:
         runner = VLMRunner()
@@ -392,13 +391,11 @@ class TestSSEParsing:
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_resp.aiter_lines = mock_aiter_lines
-
-        mock_stream_cm = AsyncMock()
-        mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_resp.aclose = AsyncMock()
 
         mock_client = AsyncMock()
-        mock_client.stream = MagicMock(return_value=mock_stream_cm)
+        mock_client.build_request = MagicMock(return_value=MagicMock())
+        mock_client.send = AsyncMock(return_value=mock_resp)
         runner._client = mock_client
 
         chunks = []
@@ -408,6 +405,7 @@ class TestSSEParsing:
         full_text = "".join(chunks)
         assert "think" not in full_text
         assert "Answer." in full_text
+        mock_resp.aclose.assert_awaited_once()
 
 
 class TestResetContext:
