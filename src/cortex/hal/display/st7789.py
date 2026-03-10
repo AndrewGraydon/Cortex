@@ -128,9 +128,9 @@ class ST7789Driver:
         self._write_command(_CMD_SLPOUT)
         time.sleep(0.12)
 
-        # Memory access control — top-to-bottom, left-to-right, RGB
+        # Memory access control — 180° rotation (MY+MX), RGB
         self._write_command(_CMD_MADCTL)
-        self._write_data(bytes([0x00]))
+        self._write_data(bytes([0xC0]))
 
         # Color mode: 16-bit RGB565
         self._write_command(_CMD_COLMOD)
