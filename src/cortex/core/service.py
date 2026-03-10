@@ -116,15 +116,13 @@ class CortexService:
 
     async def _init_real_services(self) -> None:
         """Try real HAL services, fall back to mock for each independently."""
-        # NPU — AxclNpuService requires AXCL runtime (Pi only)
+        # NPU — AxclNpuService requires AXCL kernel modules (Pi only)
         try:
-            import shutil
-
             from cortex.hal.npu.axcl import AxclNpuService
 
-            # AxclNpuService imports fine on macOS but axllm binary is Pi-only
-            if not shutil.which("axllm"):
-                msg = "axllm binary not in PATH"
+            # AxclNpuService imports fine on macOS but needs AXCL kernel modules
+            if not Path("/dev/axcl").exists():
+                msg = "AXCL device not found (/dev/axcl)"
                 raise RuntimeError(msg)  # noqa: TRY301
             self._npu = AxclNpuService()
             logger.info("NPU: using AxclNpuService")
