@@ -36,8 +36,14 @@ def main(ctx: click.Context, config_path: Path | None, log_level: str | None) ->
 
 @main.command()
 @click.option("--mock/--no-mock", default=True, help="Use mock HAL services (default: mock).")
+@click.option(
+    "--models-dir",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Override models directory (default: ~/models).",
+)
 @click.pass_context
-def run(ctx: click.Context, mock: bool) -> None:
+def run(ctx: click.Context, mock: bool, models_dir: Path | None) -> None:
     """Start the Cortex voice assistant."""
     import asyncio
 
@@ -50,7 +56,7 @@ def run(ctx: click.Context, mock: bool) -> None:
 
     from cortex.core.service import run_cortex
 
-    asyncio.run(run_cortex(mock=mock))
+    asyncio.run(run_cortex(mock=mock, models_dir=models_dir))
 
 
 @main.command()

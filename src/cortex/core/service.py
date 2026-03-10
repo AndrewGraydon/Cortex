@@ -115,7 +115,14 @@ class CortexService:
         logger.info("Cortex service ready")
 
     async def _init_real_services(self) -> None:
-        """Try real HAL services, fall back to mock for each independently."""
+        """Try real HAL services, fall back to mock for each independently.
+
+        Each service is imported and initialized in a separate try/except block.
+        The broad exception catch (ImportError, RuntimeError, OSError) handles:
+        - ImportError: missing optional dependency (RPi.GPIO, spidev, etc.)
+        - RuntimeError: hardware not available (GPIO access, AXCL init failure)
+        - OSError: missing system library (PortAudio for sounddevice), device file
+        """
         # NPU — AxclNpuService requires AXCL kernel modules (Pi only)
         try:
             from cortex.hal.npu.axcl import AxclNpuService
@@ -126,17 +133,17 @@ class CortexService:
                 raise RuntimeError(msg)  # noqa: TRY301
             self._npu = AxclNpuService()
             logger.info("NPU: using AxclNpuService")
-        except (ImportError, RuntimeError) as exc:
+        except (ImportError, RuntimeError, OSError) as exc:
             self._npu = MockNpuService()
             logger.warning("NPU: falling back to mock", reason=str(exc))
 
-        # Audio — AlsaAudioService requires pyalsa (Pi only)
+        # Audio — AlsaAudioService requires sounddevice + PortAudio
         try:
             from cortex.hal.audio.service import AlsaAudioService
 
             self._audio = AlsaAudioService()
             logger.info("Audio: using AlsaAudioService")
-        except (ImportError, RuntimeError) as exc:
+        except (ImportError, RuntimeError, OSError) as exc:
             self._audio = MockAudioService()
             logger.warning("Audio: falling back to mock", reason=str(exc))
 
@@ -148,7 +155,7 @@ class CortexService:
             await display.start()
             self._display = display
             logger.info("Display: using WhisplayDisplayService")
-        except (ImportError, RuntimeError) as exc:
+        except (ImportError, RuntimeError, OSError) as exc:
             self._display = MockDisplayService()
             logger.warning("Display: falling back to mock", reason=str(exc))
 
@@ -160,7 +167,7 @@ class CortexService:
             await button.start()
             self._button = button
             logger.info("Button: using GpioButtonService")
-        except (ImportError, RuntimeError) as exc:
+        except (ImportError, RuntimeError, OSError) as exc:
             self._button = MockButtonService()
             logger.warning("Button: falling back to mock", reason=str(exc))
 
@@ -206,11 +213,23 @@ class CortexService:
         start/stop cycles can corrupt AXCL kernel module state, so the
         VLM stays loaded for the lifetime of the service.
         """
-        logger.info("Loading models...")
+        logger.info("Loading models...", models_dir=str(self._models_dir))
 
         asr_path = self._models_dir / "SenseVoice"
         llm_path = self._models_dir / "Qwen3-VL-2B"
         tts_path = self._models_dir / "Kokoro"
+
+        # Validate model directories exist (skip if using MockNpuService)
+        if not isinstance(self._npu, MockNpuService):
+            missing = [
+                (name, path)
+                for name, path in [("ASR", asr_path), ("VLM", llm_path), ("TTS", tts_path)]
+                if not path.exists()
+            ]
+            if missing:
+                names = ", ".join(f"{name} ({path})" for name, path in missing)
+                msg = f"Model directories not found: {names}"
+                raise FileNotFoundError(msg)
 
         # VLM first: slowest to load (~45s), avoids AXCL init conflicts
         self._llm_handle = await self._npu.load_model("qwen3-vl-2b", llm_path)
@@ -230,9 +249,18 @@ class CortexService:
         )
 
 
-async def run_cortex(mock: bool = True) -> None:
+async def run_cortex(
+    mock: bool = True,
+    models_dir: Path | None = None,
+    system_prompt: str | None = None,
+) -> None:
     """Main entry point for cortex-core service."""
-    service = CortexService(mock=mock)
+    kwargs: dict[str, Any] = {"mock": mock}
+    if models_dir is not None:
+        kwargs["models_dir"] = models_dir
+    if system_prompt is not None:
+        kwargs["system_prompt"] = system_prompt
+    service = CortexService(**kwargs)
 
     stop = asyncio.Event()
 
