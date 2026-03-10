@@ -216,9 +216,19 @@ class VLMRunner:
     def _build_messages(self, prompt: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         """Build OpenAI-format messages array.
 
-        Supports text-only and vision (image+text) requests.
-        Vision: pass image_base64 in params for inline image content.
+        Supports three input modes:
+        1. Pre-built messages: pass params["messages"] for multi-turn context
+        2. Vision: pass params["image_base64"] for image+text
+        3. Text-only: default, builds [system, user] from prompt string
         """
+        # Pre-built messages passthrough (multi-turn context from pipeline)
+        if "messages" in params:
+            pre_built = list(params["messages"])
+            # Ensure system prompt is present as first message
+            if pre_built and pre_built[0].get("role") != "system" and self._system_prompt:
+                pre_built.insert(0, {"role": "system", "content": self._system_prompt})
+            return pre_built
+
         messages: list[dict[str, Any]] = []
 
         if self._system_prompt:

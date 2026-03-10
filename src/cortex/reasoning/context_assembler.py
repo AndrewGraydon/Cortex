@@ -145,3 +145,65 @@ class ContextAssembler:
             has_history=has_history,
             turns_included=turns_included,
         )
+
+    def build_messages(
+        self,
+        user_message: str,
+        tools: list[ToolSchema] | None = None,
+        memories: list[str] | None = None,
+        summary: str | None = None,
+        history: list[dict[str, str]] | None = None,
+    ) -> list[dict[str, str]]:
+        """Build OpenAI-format messages array within token budget.
+
+        Same priority scheme as assemble(), but returns structured messages
+        for the VLM's OpenAI-compatible /v1/chat/completions API.
+
+        Returns:
+            List of {"role": ..., "content": ...} dicts:
+            [system, *history_turns, user].
+        """
+        max_tokens = self._budget.max_tokens
+        used_tokens = 0
+
+        # P1: System prompt (always included)
+        system_content = build_system_prompt(tools=tools, memories=memories)
+        used_tokens += estimate_tokens(system_content)
+
+        # P2: User message (always included)
+        used_tokens += estimate_tokens(user_message)
+
+        # P5: Summary appended to system prompt if fits
+        if summary:
+            summary_block = f"\n\n[Conversation summary] {summary}"
+            summary_tokens = estimate_tokens(summary_block)
+            if used_tokens + summary_tokens <= max_tokens - self._budget.user_message_tokens:
+                system_content += summary_block
+                used_tokens += summary_tokens
+
+        # P6-P7: History turns (newest first, drop oldest)
+        history_messages: list[dict[str, str]] = []
+        if history:
+            for turn in reversed(history):
+                content = turn.get("content", "")
+                turn_tokens = estimate_tokens(content)
+                if used_tokens + turn_tokens <= max_tokens - self._budget.user_message_tokens:
+                    history_messages.insert(0, turn)
+                    used_tokens += turn_tokens
+                else:
+                    break
+
+        # Assemble messages array
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": system_content},
+        ]
+        messages.extend(history_messages)
+        messages.append({"role": "user", "content": user_message})
+
+        logger.debug(
+            "Context: %d messages, ~%d tokens (budget %d)",
+            len(messages),
+            used_tokens,
+            max_tokens,
+        )
+        return messages

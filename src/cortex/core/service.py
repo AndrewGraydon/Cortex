@@ -1,10 +1,11 @@
 """Cortex core service — orchestrates voice pipeline with HAL services.
 
 This is the main application process that:
-1. Connects to HAL services via ZeroMQ
-2. Pre-loads NPU models
-3. Runs the voice pipeline
-4. Handles graceful shutdown
+1. Initializes HAL services (real on Pi, mock fallback on other platforms)
+2. Pre-loads NPU models (VLM first to avoid AXCL lifecycle issues)
+3. Wires AgentProcessor + ContextAssembler for multi-turn conversations
+4. Runs the voice pipeline
+5. Handles graceful shutdown
 """
 
 from __future__ import annotations
@@ -17,10 +18,14 @@ from typing import Any
 
 import structlog
 
+from cortex.agent.processor import AgentProcessor
+from cortex.agent.router import IntentRouter
+from cortex.agent.tools.registry import ToolRegistry
 from cortex.hal.audio.mock import MockAudioService
 from cortex.hal.display.mock import MockButtonService, MockDisplayService
 from cortex.hal.npu.mock import MockNpuService
 from cortex.hal.types import ModelHandle
+from cortex.reasoning.context_assembler import ContextAssembler
 from cortex.voice.pipeline import VoicePipeline
 
 logger = structlog.get_logger()
@@ -37,7 +42,7 @@ class CortexService:
     """Main Cortex service orchestrator.
 
     In mock mode: uses MockNpuService, MockAudioService, MockDisplayService.
-    In real mode: connects to HAL services via ZeroMQ (Phase 1 uses mock).
+    In real mode: tries real HAL services, falls back to mock per-service.
     """
 
     def __init__(
@@ -74,17 +79,18 @@ class CortexService:
             self._display = MockDisplayService()
             self._button = MockButtonService()
         else:
-            # Real mode — import and configure real services
-            # For Phase 1, this path is identical to mock
-            # Real ZeroMQ IPC integration comes in Phase 1 polish
-            self._npu = MockNpuService()
-            self._audio = MockAudioService()
-            self._display = MockDisplayService()
-            self._button = MockButtonService()
-            logger.warning("Real HAL not yet wired — using mocks")
+            await self._init_real_services()
 
         # Pre-load models
         await self._load_models()
+
+        # Wire agent framework
+        assembler = ContextAssembler()
+        processor = AgentProcessor(
+            router=IntentRouter(),
+            registry=ToolRegistry(),
+            context_assembler=assembler,
+        )
 
         # Create and configure pipeline
         self._pipeline = VoicePipeline(
@@ -93,6 +99,8 @@ class CortexService:
             display=self._display,
             button=self._button,
             system_prompt=self._system_prompt,
+            agent_processor=processor,
+            context_assembler=assembler,
         )
         assert self._asr_handle is not None
         assert self._llm_handle is not None
@@ -105,6 +113,58 @@ class CortexService:
 
         self._running = True
         logger.info("Cortex service ready")
+
+    async def _init_real_services(self) -> None:
+        """Try real HAL services, fall back to mock for each independently."""
+        # NPU — AxclNpuService requires AXCL runtime (Pi only)
+        try:
+            import shutil
+
+            from cortex.hal.npu.axcl import AxclNpuService
+
+            # AxclNpuService imports fine on macOS but axllm binary is Pi-only
+            if not shutil.which("axllm"):
+                msg = "axllm binary not in PATH"
+                raise RuntimeError(msg)  # noqa: TRY301
+            self._npu = AxclNpuService()
+            logger.info("NPU: using AxclNpuService")
+        except (ImportError, RuntimeError) as exc:
+            self._npu = MockNpuService()
+            logger.warning("NPU: falling back to mock", reason=str(exc))
+
+        # Audio — AlsaAudioService requires pyalsa (Pi only)
+        try:
+            from cortex.hal.audio.service import AlsaAudioService
+
+            self._audio = AlsaAudioService()
+            logger.info("Audio: using AlsaAudioService")
+        except (ImportError, RuntimeError) as exc:
+            self._audio = MockAudioService()
+            logger.warning("Audio: falling back to mock", reason=str(exc))
+
+        # Display — WhisplayDisplayService handles its own HW fallback
+        try:
+            from cortex.hal.display.service import WhisplayDisplayService
+
+            display = WhisplayDisplayService()
+            await display.start()
+            self._display = display
+            logger.info("Display: using WhisplayDisplayService")
+        except (ImportError, RuntimeError) as exc:
+            self._display = MockDisplayService()
+            logger.warning("Display: falling back to mock", reason=str(exc))
+
+        # Button — GpioButtonService requires RPi.GPIO (Pi only)
+        try:
+            from cortex.hal.display.button import GpioButtonService
+
+            button = GpioButtonService()
+            await button.start()
+            self._button = button
+            logger.info("Button: using GpioButtonService")
+        except (ImportError, RuntimeError) as exc:
+            self._button = MockButtonService()
+            logger.warning("Button: falling back to mock", reason=str(exc))
 
     async def run(self) -> None:
         """Run the voice pipeline (blocks until stopped)."""
@@ -122,6 +182,12 @@ class CortexService:
 
         if self._pipeline:
             await self._pipeline.stop()
+
+        # Stop real services that support it
+        for service in [self._display, self._button]:
+            if service and hasattr(service, "stop"):
+                with contextlib.suppress(Exception):
+                    await service.stop()
 
         # Unload models
         if self._npu:

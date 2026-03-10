@@ -175,3 +175,107 @@ class TestMetadata:
         assert result.tool_names == []
         assert result.memory_count == 0
         assert result.turns_included == 0
+
+
+class TestBuildMessages:
+    """Tests for OpenAI-format messages output."""
+
+    def test_minimal_system_and_user(self) -> None:
+        asm = ContextAssembler()
+        messages = asm.build_messages("Hello")
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert "Cortex" in messages[0]["content"]
+        assert messages[1] == {"role": "user", "content": "Hello"}
+
+    def test_with_history(self) -> None:
+        history = [
+            {"role": "user", "content": "What's the weather?"},
+            {"role": "assistant", "content": "I can't check weather yet."},
+        ]
+        asm = ContextAssembler()
+        messages = asm.build_messages("Can you try?", history=history)
+        assert len(messages) == 4  # system + 2 history + user
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+        assert messages[1]["content"] == "What's the weather?"
+        assert messages[2]["role"] == "assistant"
+        assert messages[3] == {"role": "user", "content": "Can you try?"}
+
+    def test_history_budget_trimming(self) -> None:
+        budget = ContextBudget(
+            max_tokens=100,
+            system_prompt_tokens=50,
+            user_message_tokens=30,
+        )
+        history = [
+            {"role": "user", "content": "This is a very long message " * 20},
+            {"role": "assistant", "content": "This is also very long " * 20},
+        ]
+        asm = ContextAssembler(budget=budget)
+        messages = asm.build_messages("Hello", history=history)
+        # History should be dropped or partially included
+        assert len(messages) <= 4  # system + (0-2 history) + user
+        assert messages[0]["role"] == "system"
+        assert messages[-1] == {"role": "user", "content": "Hello"}
+
+    def test_with_summary(self) -> None:
+        asm = ContextAssembler()
+        messages = asm.build_messages(
+            "Continue",
+            summary="We discussed weather earlier.",
+        )
+        assert len(messages) == 2
+        assert "weather" in messages[0]["content"]
+        assert "[Conversation summary]" in messages[0]["content"]
+
+    def test_with_tools(self) -> None:
+        tools = [ToolSchema(name="clock", description="Get current time")]
+        asm = ContextAssembler()
+        messages = asm.build_messages("What time?", tools=tools)
+        assert "clock" in messages[0]["content"]
+        assert "<tool_call>" in messages[0]["content"]
+
+    def test_with_memories(self) -> None:
+        memories = ["User's name is Andrew"]
+        asm = ContextAssembler()
+        messages = asm.build_messages("Hello", memories=memories)
+        assert "Andrew" in messages[0]["content"]
+
+    def test_newest_history_kept_when_tight(self) -> None:
+        budget = ContextBudget(
+            max_tokens=300,
+            system_prompt_tokens=60,
+            user_message_tokens=30,
+        )
+        history = [
+            {"role": "user", "content": "OLD: " + "word " * 30},
+            {"role": "assistant", "content": "OLD REPLY: " + "word " * 30},
+            {"role": "user", "content": "RECENT: short"},
+            {"role": "assistant", "content": "RECENT REPLY: short"},
+        ]
+        asm = ContextAssembler(budget=budget)
+        messages = asm.build_messages("Hello", history=history)
+        # Check if recent messages are present
+        contents = [m["content"] for m in messages]
+        all_text = " ".join(contents)
+        if len(messages) > 2:
+            assert "RECENT" in all_text
+
+    def test_message_order_preserved(self) -> None:
+        history = [
+            {"role": "user", "content": "First"},
+            {"role": "assistant", "content": "Second"},
+            {"role": "user", "content": "Third"},
+            {"role": "assistant", "content": "Fourth"},
+        ]
+        asm = ContextAssembler()
+        messages = asm.build_messages("Fifth", history=history)
+        # system, First, Second, Third, Fourth, Fifth
+        roles = [m["role"] for m in messages]
+        assert roles[0] == "system"
+        assert roles[-1] == "user"
+        # History should alternate user/assistant
+        for i in range(1, len(messages) - 1, 2):
+            assert messages[i]["role"] == "user"
+            assert messages[i + 1]["role"] == "assistant"

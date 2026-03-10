@@ -91,7 +91,17 @@ async def chat_websocket(websocket: WebSocket) -> None:
             if processor:
                 try:
                     response = await processor.process(message, chat_session.voice_session)
-                    reply = chat_session.process_response(response)
+
+                    if response.used_llm and response.llm_messages:
+                        # LLM fallback: generate response via NPU
+                        reply = await _generate_llm_response(
+                            services,
+                            message,
+                            response.llm_messages,
+                            chat_session,
+                        )
+                    else:
+                        reply = chat_session.process_response(response)
                 except Exception:
                     logger.exception("AgentProcessor error for session %s", session_id)
                     reply = "Sorry, I encountered an error processing your request."
@@ -111,6 +121,32 @@ async def chat_websocket(websocket: WebSocket) -> None:
         logger.exception("WebSocket error for session %s", session_id)
     finally:
         _remove_session(session_id)
+
+
+async def _generate_llm_response(
+    services: Any,
+    message: str,
+    llm_messages: list[dict[str, str]],
+    chat_session: WebChatSession,
+) -> str:
+    """Generate an LLM response via NPU inference."""
+    npu = services.get("npu")
+    llm_handle = services.get("llm_handle")
+
+    if npu and llm_handle:
+        from cortex.hal.types import InferenceInputs
+
+        result = await npu.infer(
+            llm_handle,
+            InferenceInputs(data=message, params={"messages": llm_messages}),
+        )
+        reply = str(result.data)
+        chat_session.add_assistant_message(reply)
+        return reply
+
+    reply = "I'd like to help, but my language model isn't available right now."
+    chat_session.add_assistant_message(reply)
+    return reply
 
 
 def _render_user_bubble(text: str) -> str:

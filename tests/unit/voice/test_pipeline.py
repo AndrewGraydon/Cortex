@@ -82,6 +82,47 @@ class TestProcessUtterance:
         assert pipeline.session.history[1]["role"] == "assistant"
 
 
+class TestContextAssemblerWiring:
+    """Test that context assembler is used when provided."""
+
+    async def test_build_llm_inputs_with_assembler(self, pipeline: VoicePipeline) -> None:
+        """When assembler is present, messages should be in inputs."""
+        from cortex.reasoning.context_assembler import ContextAssembler
+
+        assembler = ContextAssembler()
+        pipeline._context_assembler = assembler
+
+        # Create a session with some history
+        audio = AudioData(samples=np.zeros(16000, dtype=np.int16), sample_rate=16000)
+        await pipeline.process_utterance(audio)
+
+        # Now build inputs with history
+        inputs = pipeline._build_llm_inputs("Follow-up question")
+        assert "messages" in inputs.params
+        messages = inputs.params["messages"]
+        assert messages[0]["role"] == "system"
+        assert messages[-1]["role"] == "user"
+        assert messages[-1]["content"] == "Follow-up question"
+
+    def test_build_llm_inputs_without_assembler(self, pipeline: VoicePipeline) -> None:
+        """Without assembler, plain text inputs returned."""
+        from cortex.voice.types import VoiceSession
+
+        pipeline._session = VoiceSession()
+        inputs = pipeline._build_llm_inputs("Hello")
+        assert inputs.params == {}
+        assert str(inputs.data) == "Hello"
+
+    def test_build_llm_inputs_without_session(self, pipeline: VoicePipeline) -> None:
+        """Without session, plain text even if assembler exists."""
+        from cortex.reasoning.context_assembler import ContextAssembler
+
+        pipeline._context_assembler = ContextAssembler()
+        pipeline._session = None
+        inputs = pipeline._build_llm_inputs("Hello")
+        assert inputs.params == {}
+
+
 class TestSentenceDetectorIntegration:
     def test_detector_exists(self) -> None:
         from cortex.voice.sentence_detector import SentenceDetector

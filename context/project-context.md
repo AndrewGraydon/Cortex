@@ -1,5 +1,5 @@
 # Project Cortex — AI Assistant Context File
-# Last updated: 2026-03-09 (Session 22)
+# Last updated: 2026-03-10 (Session 23)
 
 ## Purpose
 This file captures the full project context so that design conversations can be resumed across sessions. Feed this file to the AI assistant at the start of a new conversation.
@@ -119,6 +119,7 @@ Seven-layer stack:
 - **Phase 3a** — Web Foundation (COMPLETE — 736 tests, 7 milestones)
 - **Phase 3b** — External Services (COMPLETE — 1,084 tests, CalDAV, email, ntfy, MCP, A2A)
 - **Phase 4** — Dynamic Capabilities (COMPLETE — 1,524 tests, 7 milestones, 5 exit criteria met)
+- **E2E Integration** — All layers wired together (COMPLETE — 2,224 tests, Session 23)
 - **Phase 5** — IoT integration, LLM-driven memory consolidation (DD-053), proactive LLM correlation (DD-038)
 - **Phase 6** — Hardening and polish
 
@@ -260,10 +261,10 @@ Cortex/
 │   │   └── bus.py           # MessageBus (pub/sub)
 │   └── utils/               # Shared utilities
 │       └── logging.py       # Centralized structlog configuration
-├── tests/                   # Test suites (487 passing)
-│   ├── unit/                # Off-Pi tests (475 tests)
-│   ├── integration/         # Integration tests (12 tests — Phase 2 exit criteria)
-│   └── hardware/            # Pi-only tests (17 tests, pytest -m hardware)
+├── tests/                   # Test suites (2,224 passing)
+│   ├── unit/                # Off-Pi tests (run everywhere)
+│   ├── integration/         # Integration tests (E2E exit criteria)
+│   └── hardware/            # Pi-only tests (19 tests, pytest -m hardware)
 ├── config/                  # Config files
 │   ├── cortex.yaml.template # Config template
 │   ├── prompts/             # System prompts
@@ -365,8 +366,27 @@ Cortex/
 
   Scope doc updated to v0.1.26.
 
+- **Session 23 (2026-03-10):** End-to-end voice assistant integration — wired all building blocks together into a working assistant. Five-step integration completed:
+
+  **Step 1: VLMRunner messages passthrough** — Modified `runners/vlm.py` `_build_messages()` to accept pre-built OpenAI-format messages via `params["messages"]`. Enables multi-turn conversation context to flow from pipeline → VLM without breaking existing text-only or vision paths.
+
+  **Step 2: ContextAssembler.build_messages()** — Added new method to `context_assembler.py` returning `list[dict[str, str]]` in OpenAI messages format. Reuses existing token budgeting (P1-P7 priorities, 2,047 token limit). Returns `[system, *history_turns, user]`. History trimmed oldest-first when budget tight.
+
+  **Step 3: VoicePipeline context wiring** — Added `context_assembler` param to `VoicePipeline.__init__()`. New `_build_llm_inputs()` method passes conversation history through assembler into `InferenceInputs.params["messages"]`. Backward-compatible: no assembler → existing text-only path.
+
+  **Step 4: AgentProcessor + Web Chat LLM** — Added `llm_messages` field to `AgentResponse`. AgentProcessor now builds messages on LLM fallback path. Web chat handler (`chat.py`) calls `npu.infer()` when `used_llm=True` with pre-built messages, graceful "model unavailable" fallback when no NPU.
+
+  **Step 5: CortexService real HAL services** — Replaced mock-only `else` branch with `_init_real_services()`: tries real services (AxclNpuService, AlsaAudioService, WhisplayDisplayService, GpioButtonService) with per-service try/except fallback to mocks. Wires AgentProcessor + ContextAssembler into pipeline. `stop()` cleans up real services. NPU guard: checks for `axllm` in PATH before attempting AxclNpuService (prevents macOS fallthrough where import succeeds but model loading fails).
+
+  **Documentation:** Updated README.md (comprehensive quickstart, architecture, project structure), CLAUDE.md (current phase, test count), project-context.md (session notes, file structure, test counts).
+
+  **Result:** 2,224 tests passing, ruff + mypy strict clean. `cortex run --no-mock` ready for Pi hardware testing.
+
 ### NEXT SESSION — Resume Here
-**Topic:** Phase 5 planning.
+**Topic:** Pi hardware testing + Phase 5 planning.
+- Test `cortex run --no-mock` on Pi (button → ASR → agent routing → VLM → TTS → speaker)
+- Verify multi-turn conversation ("What time is it?" → "And the date?" retains context)
+- Verify web chat LLM responses at `http://10.10.0.129:8000/chat`
 - Phase 5 scope definition and milestone planning
 - IoT integration: MQTT, Home Assistant Wyoming protocol (DD-037)
 - LLM-driven memory consolidation during idle time (DD-053, extends DD-038)

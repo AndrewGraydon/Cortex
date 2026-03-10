@@ -80,6 +80,79 @@ class TestMessageBuilding:
         assert isinstance(messages[1]["content"], list)
 
 
+class TestMessagesPassthrough:
+    """Test pre-built messages passthrough for multi-turn context."""
+
+    def test_messages_param_used_directly(self) -> None:
+        runner = VLMRunner()
+        runner._system_prompt = "You are helpful."
+        pre_built = [
+            {"role": "system", "content": "Custom system prompt"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
+            {"role": "user", "content": "How are you?"},
+        ]
+        messages = runner._build_messages("ignored", {"messages": pre_built})
+        assert len(messages) == 4
+        assert messages[0]["role"] == "system"
+        assert messages[0]["content"] == "Custom system prompt"
+        assert messages[-1]["content"] == "How are you?"
+
+    def test_system_prompt_prepended_if_missing(self) -> None:
+        runner = VLMRunner()
+        runner._system_prompt = "You are helpful."
+        pre_built = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
+            {"role": "user", "content": "Follow-up"},
+        ]
+        messages = runner._build_messages("ignored", {"messages": pre_built})
+        assert len(messages) == 4
+        assert messages[0] == {"role": "system", "content": "You are helpful."}
+        assert messages[1]["content"] == "Hello"
+
+    def test_no_duplicate_system_prompt(self) -> None:
+        runner = VLMRunner()
+        runner._system_prompt = "You are helpful."
+        pre_built = [
+            {"role": "system", "content": "Already has system"},
+            {"role": "user", "content": "Hello"},
+        ]
+        messages = runner._build_messages("ignored", {"messages": pre_built})
+        assert len(messages) == 2
+        assert messages[0]["content"] == "Already has system"
+
+    def test_no_system_prompt_injection_when_empty(self) -> None:
+        runner = VLMRunner()
+        runner._system_prompt = ""
+        pre_built = [
+            {"role": "user", "content": "Hello"},
+        ]
+        messages = runner._build_messages("ignored", {"messages": pre_built})
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+
+    def test_messages_does_not_mutate_original(self) -> None:
+        runner = VLMRunner()
+        runner._system_prompt = "You are helpful."
+        pre_built = [{"role": "user", "content": "Hello"}]
+        original_len = len(pre_built)
+        runner._build_messages("ignored", {"messages": pre_built})
+        assert len(pre_built) == original_len
+
+    def test_vision_param_ignored_when_messages_present(self) -> None:
+        runner = VLMRunner()
+        runner._system_prompt = ""
+        pre_built = [{"role": "user", "content": "Hello"}]
+        messages = runner._build_messages(
+            "ignored",
+            {"messages": pre_built, "image_base64": "abc123"},
+        )
+        # Messages passthrough takes priority — no vision content
+        assert len(messages) == 1
+        assert messages[0]["content"] == "Hello"
+
+
 class TestRequestBodyBuilding:
     """Test OpenAI request body construction."""
 

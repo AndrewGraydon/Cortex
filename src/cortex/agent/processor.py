@@ -95,11 +95,16 @@ class AgentProcessor:
         if decision.intent_type == IntentType.UTILITY:
             return await self._handle_utility(decision, text)
 
-        # LLM fallback — return None to let pipeline handle streaming
+        # LLM fallback — build messages context for callers that need it
+        messages = self._assembler.build_messages(
+            user_message=text,
+            history=session.history if session else None,
+        )
         return AgentResponse(
             text="",
             used_llm=True,
             intent_id=None,
+            llm_messages=messages,
         )
 
     async def _handle_utility(

@@ -83,3 +83,4 @@ class AgentResponse:
     tool_results: list[ToolResult] = field(default_factory=list)  # Results
     used_llm: bool = False  # Whether LLM was invoked
     intent_id: str | None = None  # Matched intent, if any
+    llm_messages: list[dict[str, str]] | None = None  # Pre-built OpenAI messages for VLM

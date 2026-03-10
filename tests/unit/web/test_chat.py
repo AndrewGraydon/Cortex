@@ -179,6 +179,66 @@ class TestWebSocketWithProcessor:
 
 
 # ---------------------------------------------------------------------------
+# WebSocket with LLM integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestWebSocketWithLLM:
+    """Tests for WebSocket chat with NPU-backed LLM responses."""
+
+    @pytest.fixture
+    def app_with_llm(self, config: CortexConfig) -> TestClient:
+        """App with AgentProcessor + MockNpuService for LLM responses."""
+        import asyncio
+        from pathlib import Path
+
+        from cortex.hal.npu.mock import MockNpuService
+
+        mock_npu = MockNpuService()
+        # Load models synchronously for test setup
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(mock_npu.load_model("sensevoice", Path("/mock/asr")))
+        llm_h = loop.run_until_complete(mock_npu.load_model("qwen3-vl-2b", Path("/mock/vlm")))
+        loop.run_until_complete(mock_npu.load_model("kokoro", Path("/mock/tts")))
+        loop.close()
+
+        processor = AgentProcessor(
+            router=IntentRouter(),
+            registry=ToolRegistry(),
+        )
+        application = create_app(
+            config=config,
+            enable_auth=False,
+            agent_processor=processor,
+            npu=mock_npu,
+            llm_handle=llm_h,
+        )
+        with TestClient(application) as client:
+            yield client
+
+    def test_llm_query_generates_response(self, app_with_llm: TestClient) -> None:
+        with app_with_llm.websocket_connect("/ws/chat") as ws:
+            ws.send_text(json.dumps({"message": "tell me about quantum physics"}))
+            ws.receive_text()  # user bubble
+            assistant_html = ws.receive_text()
+            assert "chat-start" in assistant_html
+            # Should NOT be the "unavailable" message
+            assert "isn&#x27;t available" not in assistant_html
+
+    def test_llm_query_without_npu_shows_unavailable(
+        self,
+        app_with_processor: TestClient,
+    ) -> None:
+        with app_with_processor.websocket_connect("/ws/chat") as ws:
+            ws.send_text(json.dumps({"message": "tell me about quantum physics"}))
+            ws.receive_text()  # user bubble
+            assistant_html = ws.receive_text()
+            assert "chat-start" in assistant_html
+            # Without NPU, should show unavailable message
+            assert "available" in assistant_html
+
+
+# ---------------------------------------------------------------------------
 # Chat session management tests
 # ---------------------------------------------------------------------------
 

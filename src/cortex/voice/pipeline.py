@@ -65,6 +65,7 @@ class VoicePipeline:
         button: Any,
         system_prompt: str = "You are Cortex, a helpful voice assistant. Be concise.",
         agent_processor: Any = None,
+        context_assembler: Any = None,
     ) -> None:
         self._npu = npu
         self._audio = audio
@@ -72,6 +73,7 @@ class VoicePipeline:
         self._button = button
         self._system_prompt = system_prompt
         self._agent_processor = agent_processor
+        self._context_assembler = context_assembler
 
         # Model handles (set after loading)
         self._asr_handle: ModelHandle | None = None
@@ -273,6 +275,16 @@ class VoicePipeline:
                     return apology
         return ""  # unreachable, satisfies mypy
 
+    def _build_llm_inputs(self, user_text: str) -> InferenceInputs:
+        """Build LLM inference inputs with conversation history if available."""
+        if self._context_assembler and self._session:
+            messages = self._context_assembler.build_messages(
+                user_message=user_text,
+                history=self._session.history,
+            )
+            return InferenceInputs(data=user_text, params={"messages": messages})
+        return InferenceInputs(data=user_text)
+
     async def _run_llm_tts_streaming(self, user_text: str, metrics: LatencyMetrics) -> str:
         """Stream LLM → sentence detect → TTS → playback."""
         assert self._llm_handle is not None
@@ -282,9 +294,9 @@ class VoicePipeline:
         first_token = True
         self._sentence_detector.reset()
 
-        async for chunk in self._npu.infer_stream(
-            self._llm_handle, InferenceInputs(data=user_text)
-        ):
+        inputs = self._build_llm_inputs(user_text)
+
+        async for chunk in self._npu.infer_stream(self._llm_handle, inputs):
             token_text = str(chunk.data)
             full_response += token_text
 
