@@ -46,6 +46,12 @@ dependencies = [
     # Document ingestion (Phase 4)
     "pypdf>=3.17.0",
     "beautifulsoup4>=4.12.0",
+    # Wyoming protocol bridge (Phase 5)
+    "wyoming>=1.5.0",
+    # MQTT 5.0 client (Phase 5)
+    "paho-mqtt>=2.0.0",
+    # Display rendering (LCD)
+    "Pillow>=10.0.0",
 ]
 
 [project.optional-dependencies]
@@ -62,6 +68,8 @@ pi = [
     # Pi-specific deps installed only on target hardware
     "uvloop>=0.19.0",
     "onnxruntime>=1.16.0",
+    "spidev>=3.6",
+    "cairosvg>=2.7.0",
 ]
 
 [project.scripts]
@@ -87,7 +95,8 @@ strict = true
 [[tool.mypy.overrides]]
 module = [
     "sounddevice.*", "zmq.*", "axengine.*", "bcrypt.*", "caldav.*", "mcp.*",
-    "onnxruntime.*", "tokenizers.*", "pypdf.*", "bs4.*",
+    "onnxruntime.*", "tokenizers.*", "pypdf.*", "bs4.*", "wyoming.*",
+    "paho.*", "spidev.*", "cairosvg.*",
 ]
 ignore_missing_imports = true
 
@@ -96,4 +105,5 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "hardware: requires Pi hardware (deselect with '-m not hardware')",
+    "soak: long-duration soak tests (deselect with '-m not soak')",
 ]

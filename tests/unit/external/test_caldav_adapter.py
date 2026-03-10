@@ -174,6 +174,57 @@ class TestMockAdapterDeleteEvent:
         assert events[0].uid == "keep"
 
 
+class TestMockAdapterGetEvent:
+    async def test_get_existing(self) -> None:
+        adapter = MockCalendarAdapter()
+        await adapter.create_event(_make_event(uid="e1", summary="Meeting"))
+
+        event = await adapter.get_event("e1")
+        assert event is not None
+        assert event.uid == "e1"
+        assert event.summary == "Meeting"
+
+    async def test_get_nonexistent(self) -> None:
+        adapter = MockCalendarAdapter()
+        event = await adapter.get_event("missing")
+        assert event is None
+
+
+class TestMockAdapterUpdateEvent:
+    async def test_update_existing(self) -> None:
+        adapter = MockCalendarAdapter()
+        original = _make_event(uid="e1", summary="Old Title")
+        await adapter.create_event(original)
+
+        updated = _make_event(uid="e1", summary="New Title")
+        result = await adapter.update_event(updated)
+        assert result is not None
+        assert result.summary == "New Title"
+
+        fetched = await adapter.get_event("e1")
+        assert fetched is not None
+        assert fetched.summary == "New Title"
+
+    async def test_update_nonexistent(self) -> None:
+        adapter = MockCalendarAdapter()
+        event = _make_event(uid="missing", summary="No match")
+        result = await adapter.update_event(event)
+        assert result is None
+
+    async def test_update_preserves_other_events(self) -> None:
+        adapter = MockCalendarAdapter()
+        await adapter.create_event(_make_event(uid="e1", summary="Event 1"))
+        await adapter.create_event(_make_event(uid="e2", summary="Event 2"))
+
+        updated = _make_event(uid="e1", summary="Updated Event 1")
+        await adapter.update_event(updated)
+
+        e1 = await adapter.get_event("e1")
+        e2 = await adapter.get_event("e2")
+        assert e1 is not None and e1.summary == "Updated Event 1"
+        assert e2 is not None and e2.summary == "Event 2"
+
+
 class TestMockAdapterSampleEvents:
     def test_add_sample_events(self) -> None:
         adapter = MockCalendarAdapter()

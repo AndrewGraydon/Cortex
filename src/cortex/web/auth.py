@@ -148,6 +148,21 @@ class AuthService:
         return cursor.rowcount
 
     @staticmethod
+    def check_secret_key() -> bool:
+        """Check if the secret key is the dev default. Returns True if safe.
+
+        Logs a loud warning if the dev default is in use.
+        """
+        secret = os.environ.get("CORTEX_SECRET_KEY", "cortex-dev-secret")
+        if secret == "cortex-dev-secret":
+            logger.warning(
+                "SECURITY: CORTEX_SECRET_KEY is the dev default! "
+                "Set a unique key in .env for production use."
+            )
+            return False
+        return True
+
+    @staticmethod
     def generate_csrf_token(session_id: str) -> str:
         """Generate a CSRF token derived from the session ID.
 

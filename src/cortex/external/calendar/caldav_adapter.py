@@ -129,6 +129,48 @@ class CalDAVCalendarAdapter:
             logger.exception("CalDAV create_event failed", summary=event.summary)
             raise
 
+    async def get_event(self, uid: str) -> CalendarEvent | None:
+        """Get a single event by UID from the CalDAV server."""
+        if self._calendar is None:
+            return None
+        try:
+            raw_events = self._calendar.events()
+            for raw in raw_events:
+                vevent = raw.vobject_instance.vevent
+                if str(vevent.uid.value) == uid:
+                    return _parse_vevent(raw)
+            return None
+        except Exception:
+            logger.exception("CalDAV get_event failed", uid=uid)
+            return None
+
+    async def update_event(self, event: CalendarEvent) -> CalendarEvent | None:
+        """Update an existing event on the CalDAV server.
+
+        Finds the event by UID, replaces it with the new data.
+        Returns the updated event, or None if not found.
+        """
+        if self._calendar is None:
+            return None
+        try:
+            raw_events = self._calendar.events()
+            for raw in raw_events:
+                vevent = raw.vobject_instance.vevent
+                if str(vevent.uid.value) == event.uid:
+                    raw.delete()
+                    vcal = _build_vcalendar(event)
+                    self._calendar.save_event(vcal)
+                    logger.info(
+                        "CalDAV event updated",
+                        summary=event.summary,
+                        uid=event.uid,
+                    )
+                    return event
+            return None
+        except Exception:
+            logger.exception("CalDAV update_event failed", uid=event.uid)
+            return None
+
     async def delete_event(self, uid: str) -> bool:
         """Delete an event by UID from the CalDAV server."""
         if self._calendar is None:

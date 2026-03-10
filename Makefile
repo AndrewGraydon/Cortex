@@ -1,4 +1,4 @@
-.PHONY: dev install lint format test test-hw test-all clean
+.PHONY: dev install lint format test test-hw test-all test-fault test-soak backup restore clean
 
 # Development setup
 dev:
@@ -23,7 +23,7 @@ format:
 
 # Tests
 test:
-	pytest -m "not hardware" --tb=short -q
+	pytest -m "not hardware and not soak" --tb=short -q
 
 test-hw:
 	pytest -m "hardware" --tb=short -q
@@ -32,7 +32,20 @@ test-all:
 	pytest --tb=short
 
 test-cov:
-	pytest -m "not hardware" --cov=cortex --cov-report=term-missing --tb=short
+	pytest -m "not hardware and not soak" --cov=cortex --cov-report=term-missing --tb=short
+
+test-fault:
+	pytest tests/soak/test_fault_injection.py -v --tb=short
+
+test-soak:
+	SOAK_DRY_RUN=1 pytest tests/soak/test_soak_24h.py -m soak -v --tb=short
+
+# Backup and restore
+backup:
+	bash scripts/backup.sh
+
+restore:
+	bash scripts/restore.sh
 
 # Cleanup
 clean:

@@ -182,6 +182,101 @@ BUILTIN_PATTERNS = [
         ],
         tool_hint="notification_send_external",
     ),
+    # Weather query
+    IntentPattern(
+        "weather_query",
+        IntentType.UTILITY,
+        [
+            r"what'?s\s+the\s+weather",
+            r"(?:how'?s|what'?s)\s+(?:the\s+)?weather\s+(?:like|looking|today|tomorrow)?",
+            r"(?:what|how)\s+(?:is|will)\s+(?:the\s+)?(?:temperature|temp|forecast)",
+            r"(?:will\s+it|is\s+it\s+going\s+to)\s+(?:rain|snow|be\s+(?:hot|cold|warm|sunny|cloudy))",
+            r"(?:current|today'?s?|tomorrow'?s?)\s+(?:weather|temperature|forecast)",
+            r"(?:weather|temperature|forecast)\s+(?:today|tomorrow|this\s+week)",
+        ],
+        tool_hint="weather_query",
+    ),
+    # Task query
+    IntentPattern(
+        "task_query",
+        IntentType.UTILITY,
+        [
+            r"(?:show|list|check|view|what\s+are)\s+(?:my\s+)?(?:tasks?|to-?dos?|things\s+to\s+do)",
+            r"(?:do\s+i\s+have\s+)?(?:any\s+)?(?:pending\s+)?(?:tasks?|to-?dos?)",
+            r"what(?:'s|\s+is)\s+on\s+my\s+(?:task|to-?do)\s*(?:list)?",
+        ],
+        tool_hint="task_query",
+    ),
+    # Task create
+    IntentPattern(
+        "task_create",
+        IntentType.UTILITY,
+        [
+            r"(?:add|create|make)\s+(?:a\s+)?(?:task|to-?do)",
+            r"(?:remind\s+me\s+to|i\s+need\s+to)\s+(?P<summary>.+)",
+        ],
+        tool_hint="task_create",
+        extract_groups=True,
+    ),
+    # Device control
+    IntentPattern(
+        "device_control",
+        IntentType.UTILITY,
+        [
+            r"turn\s+(?:on|off)\s+(?:the\s+)?(?P<device>.+)",
+            r"(?:switch|toggle)\s+(?:the\s+)?(?P<device>.+?)(?:\s+(?:on|off))?$",
+            r"(?:dim|brighten)\s+(?:the\s+)?(?P<device>.+?)(?:\s+to\s+(?P<brightness>\d+))?",
+            r"set\s+(?:the\s+)?(?P<device>.+?)\s+(?:to|at)\s+(?P<value>.+)",
+        ],
+        tool_hint="device_control",
+        extract_groups=True,
+    ),
+    # Device query
+    IntentPattern(
+        "device_query",
+        IntentType.UTILITY,
+        [
+            r"(?:what'?s|what\s+is)\s+(?:the\s+)?(?:state|status)\s+of\s+(?:the\s+)?(?P<device>.+)",
+            r"is\s+(?:the\s+)?(?P<device>.+?)\s+(?:on|off|open|closed|locked|unlocked)",
+            r"(?:check|get)\s+(?:the\s+)?(?P<device>.+?)\s+(?:state|status)",
+        ],
+        tool_hint="device_query",
+        extract_groups=True,
+    ),
+    # Device list
+    IntentPattern(
+        "device_list",
+        IntentType.UTILITY,
+        [
+            r"(?:list|show|what)\s+(?:all\s+)?(?:my\s+)?(?:smart\s+home\s+)?devices?",
+            r"what\s+devices?\s+(?:do\s+i\s+have|are\s+(?:there|available))",
+            r"(?:show|list)\s+(?:the\s+)?(?:devices?|lights?|switches?)\s+in\s+(?:the\s+)?(?P<room>.+)",
+        ],
+        tool_hint="device_list",
+        extract_groups=True,
+    ),
+    # Automation query
+    IntentPattern(
+        "automation_query",
+        IntentType.UTILITY,
+        [
+            r"(?:list|show|what)\s+(?:my\s+)?automations?",
+            r"what\s+automations?\s+(?:do\s+i\s+have|are\s+(?:set\s+up|configured))",
+        ],
+        tool_hint="automation_query",
+    ),
+    # Automation create
+    IntentPattern(
+        "automation_create",
+        IntentType.UTILITY,
+        [
+            r"(?:create|add|set\s+up)\s+(?:an?\s+)?automation",
+            r"(?:every|when)\s+(?:night|morning|day)\s+(?:at\s+)?\d",
+            r"when\s+(?P<device>.+?)\s+(?:turns?\s+(?:on|off)|changes?)\s+(?:then\s+)?(?P<action>.+)",
+        ],
+        tool_hint="automation_create",
+        extract_groups=True,
+    ),
 ]
 
 

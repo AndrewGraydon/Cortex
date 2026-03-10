@@ -14,6 +14,8 @@ class ProactiveType(enum.Enum):
     ROUTINE_REMINDER = "routine_reminder"
     MORNING_BRIEFING = "morning_briefing"
     PATTERN_ALERT = "pattern_alert"
+    ANTICIPATORY_REMINDER = "anticipatory_reminder"
+    IOT_ALERT = "iot_alert"
 
 
 @dataclass
@@ -26,6 +28,19 @@ class RoutinePattern:
     day_of_week: int  # 0=Monday
     count: int
     confidence: float = 0.0
+
+
+@dataclass
+class ProactiveSchedule:
+    """A recurring schedule for proactive actions."""
+
+    schedule_id: str
+    name: str
+    hour: int = 0
+    minute: int = 0
+    interval_seconds: float = 0.0  # 0 = daily at hour:minute, >0 = interval
+    enabled: bool = True
+    last_fired: float = 0.0
 
 
 @dataclass

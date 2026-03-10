@@ -11,6 +11,7 @@ from typing import Any
 
 import structlog
 
+from cortex.hal.types import DisplayState
 from cortex.ipc.bus import MessageBus
 from cortex.ipc.messages import CortexMessage
 
@@ -82,6 +83,7 @@ async def run_display_service(mock: bool = False) -> None:
             try:
                 msg = await asyncio.wait_for(bus.receive(), timeout=1.0)
                 logger.debug("Display received: %s", msg.topic)
+                await _dispatch_message(display, msg)
             except TimeoutError:
                 continue
     finally:
@@ -92,6 +94,26 @@ async def run_display_service(mock: bool = False) -> None:
             await display.stop()
         await bus.close()
         logger.info("Display service stopped")
+
+
+async def _dispatch_message(display: Any, msg: CortexMessage) -> None:
+    """Route incoming ZeroMQ messages to display service methods."""
+    if msg.topic == "display.set_state":
+        state_str = msg.payload.get("state", "idle")
+        text = msg.payload.get("text", "")
+        try:
+            state = DisplayState(state_str)
+        except ValueError:
+            logger.warning("Unknown display state: %s", state_str)
+            return
+        await display.set_state(state, text=text)
+    elif msg.topic == "display.show_text":
+        text = msg.payload.get("text", "")
+        await display.show_text(text)
+    elif msg.topic == "display.brightness":
+        brightness = msg.payload.get("value", 80)
+        if hasattr(display, "set_brightness"):
+            await display.set_brightness(int(brightness))
 
 
 def main() -> None:

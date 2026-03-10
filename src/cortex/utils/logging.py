@@ -10,6 +10,8 @@ import logging
 
 import structlog
 
+from cortex.security.log_redactor import log_redactor
+
 
 def configure_logging(log_level: str = "INFO", json: bool = False) -> None:
     """Configure structlog for a Cortex service process.
@@ -26,6 +28,7 @@ def configure_logging(log_level: str = "INFO", json: bool = False) -> None:
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
+        log_redactor,
     ]
 
     if json:

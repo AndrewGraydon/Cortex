@@ -1,13 +1,17 @@
 """Health monitoring — polls component health and computes overall status.
 
 Provides structured health data for the /api/health endpoint.
+Supports reactive callbacks when health state changes.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -43,9 +47,19 @@ class SystemHealth:
             "models_loaded": self.models_loaded,
         }
 
+    def component_details(self, name: str) -> dict[str, Any]:
+        """Get details dict for a named component."""
+        for c in self.components:
+            if c.name == name:
+                return c.details
+        return {}
+
 
 class HealthMonitor:
     """Monitors system health by polling components.
+
+    Supports reactive polling: call ``start_polling()`` to begin periodic
+    health checks with callbacks on state changes.
 
     Args:
         npu: NPU service for model/temperature status.
@@ -60,10 +74,61 @@ class HealthMonitor:
         self._npu = npu
         self._poll_interval = poll_interval_s
         self._start_time = time.time()
+        self._on_change_callbacks: list[Callable[[SystemHealth], None]] = []
+        self._last_status: str = "healthy"
+        self._poll_task: asyncio.Task[None] | None = None
+        self._running = False
 
     @property
     def uptime_seconds(self) -> float:
         return time.time() - self._start_time
+
+    @property
+    def is_polling(self) -> bool:
+        return self._running
+
+    def on_health_change(self, callback: Callable[[SystemHealth], None]) -> None:
+        """Register a callback invoked when the overall health status changes."""
+        self._on_change_callbacks.append(callback)
+
+    async def start_polling(self) -> None:
+        """Start periodic health check loop with change detection."""
+        if self._running:
+            return
+        self._running = True
+        self._poll_task = asyncio.create_task(self._poll_loop())
+        logger.info("Health polling started (interval=%.1fs)", self._poll_interval)
+
+    async def stop_polling(self) -> None:
+        """Stop periodic health check loop."""
+        self._running = False
+        if self._poll_task:
+            self._poll_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._poll_task
+            self._poll_task = None
+        logger.info("Health polling stopped")
+
+    async def _poll_loop(self) -> None:
+        """Periodic health check loop with change detection."""
+        while self._running:
+            try:
+                health = await self.check()
+                if health.status != self._last_status:
+                    logger.info(
+                        "Health status changed: %s -> %s",
+                        self._last_status,
+                        health.status,
+                    )
+                    self._last_status = health.status
+                    for cb in self._on_change_callbacks:
+                        try:
+                            cb(health)
+                        except Exception:
+                            logger.exception("Health change callback error")
+            except Exception:
+                logger.exception("Health check failed")
+            await asyncio.sleep(self._poll_interval)
 
     async def check(self) -> SystemHealth:
         """Run a full health check."""
@@ -80,7 +145,7 @@ class HealthMonitor:
 
         # NPU health
         if self._npu:
-            components.append(await self._check_npu())
+            components.append(await self._check_npu(self._npu))
 
         # Compute overall status
         statuses = [c.status for c in components]

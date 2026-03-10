@@ -369,11 +369,29 @@ class SmtpConfig(BaseModel):
     # password from .env: SMTP_PASSWORD
 
 
+class WeatherConfig(BaseModel):
+    enabled: bool = False
+    provider: str = "openweathermap"
+    latitude: float = 0.0
+    longitude: float = 0.0
+    units: str = "metric"  # metric, imperial, standard
+    cache_ttl_seconds: int = 900  # 15 minutes
+    # API key from .env: OPENWEATHERMAP_API_KEY
+
+
+class TaskConfig(BaseModel):
+    enabled: bool = False
+    provider: str = "caldav"
+    # Shares CalDAV connection settings with calendar
+
+
 class ExternalServicesConfig(BaseModel):
     calendar: CalDAVConfig = Field(default_factory=CalDAVConfig)
     messaging: NtfyConfig = Field(default_factory=NtfyConfig)
     email_imap: ImapConfig = Field(default_factory=ImapConfig)
     email_smtp: SmtpConfig = Field(default_factory=SmtpConfig)
+    weather: WeatherConfig = Field(default_factory=WeatherConfig)
+    tasks: TaskConfig = Field(default_factory=TaskConfig)
 
 
 # --- Power Config ---
@@ -393,6 +411,10 @@ class ProactiveConfig(BaseModel):
     think_interval_seconds: float = 300.0
     min_pattern_occurrences: int = 5
     morning_briefing_enabled: bool = False
+    morning_briefing_hour: int = 7
+    morning_briefing_minute: int = 0
+    consolidation_enabled: bool = False
+    consolidation_interval_minutes: int = 60
 
 
 # --- Network Security Config ---
@@ -402,6 +424,88 @@ class NetworkSecurityConfig(BaseModel):
     enabled: bool = False
     default_policy: str = "deny"
     allowlist: list[str] = Field(default_factory=list)
+
+
+# --- Wyoming Config ---
+
+
+class WyomingConfig(BaseModel):
+    enabled: bool = False
+    stt_port: int = 10300
+    tts_port: int = 10200
+    stt_enabled: bool = True
+    tts_enabled: bool = True
+
+
+# --- IoT Config ---
+
+
+class MqttConfig(BaseModel):
+    enabled: bool = False
+    host: str = "localhost"
+    port: int = 1883
+    username: str = ""
+    # password from .env: MQTT_PASSWORD
+    client_id: str = "cortex"
+
+
+class DeviceRegistryConfig(BaseModel):
+    db_path: str = "data/devices.db"
+
+
+class HomeAssistantConfig(BaseModel):
+    enabled: bool = False
+    url: str = "http://homeassistant.local:8123"
+    token_env: str = "HA_TOKEN"
+
+
+class SimulatorConfig(BaseModel):
+    enabled: bool = False
+    demo_devices: bool = True
+
+
+class AutomationConfig(BaseModel):
+    enabled: bool = False
+    db_path: str = "data/automations.db"
+
+
+class AlertConfig(BaseModel):
+    enabled: bool = False
+    temperature_threshold: float = 35.0
+    offline_minutes: int = 60
+
+
+class IoTConfig(BaseModel):
+    mqtt: MqttConfig = Field(default_factory=MqttConfig)
+    device_registry: DeviceRegistryConfig = Field(default_factory=DeviceRegistryConfig)
+    homeassistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
+    simulator: SimulatorConfig = Field(default_factory=SimulatorConfig)
+    automation: AutomationConfig = Field(default_factory=AutomationConfig)
+    alerts: AlertConfig = Field(default_factory=AlertConfig)
+
+
+# --- Maintenance Config ---
+
+
+class MaintenanceConfig(BaseModel):
+    backup_retain_count: int = 7
+    retention_check_interval_hours: int = 24
+
+
+# --- Resilience Config ---
+
+
+class CircuitBreakerConfig(BaseModel):
+    failure_threshold: int = 3
+    recovery_timeout_s: float = 30.0
+    half_open_max_calls: int = 1
+
+
+class ResilienceConfig(BaseModel):
+    circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
+    watchdog_enabled: bool = True
+    watchdog_interval_s: float = 10.0
+    health_poll_interval_s: float = 30.0
 
 
 # --- Top-level Config ---
@@ -427,6 +531,10 @@ class CortexConfig(BaseModel):
     power: PowerConfig = Field(default_factory=PowerConfig)
     network_security: NetworkSecurityConfig = Field(default_factory=NetworkSecurityConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
+    wyoming: WyomingConfig = Field(default_factory=WyomingConfig)
+    iot: IoTConfig = Field(default_factory=IoTConfig)
+    maintenance: MaintenanceConfig = Field(default_factory=MaintenanceConfig)
+    resilience: ResilienceConfig = Field(default_factory=ResilienceConfig)
 
 
 # --- Config search paths (in priority order) ---

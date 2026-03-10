@@ -70,7 +70,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if not AuthService.verify_csrf_token(session_id, csrf_token):
                 return Response(content="CSRF validation failed", status_code=403)
 
-        return await call_next(request)
+        resp = await call_next(request)
+        self._add_security_headers(resp)
+        return resp
+
+    @staticmethod
+    def _add_security_headers(response: Response) -> None:
+        """Add security headers to every response."""
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
 
     @staticmethod
     def _is_exempt(path: str) -> bool:

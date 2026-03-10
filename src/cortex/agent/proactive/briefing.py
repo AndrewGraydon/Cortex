@@ -1,7 +1,7 @@
 """Briefing builder — composes morning briefings from multiple sources.
 
-Combines calendar events, reminders, and detected patterns into
-a formatted briefing text for delivery via TTS or display.
+Combines calendar events, reminders, detected patterns, weather,
+and smart home state into a formatted briefing for TTS or display.
 """
 
 from __future__ import annotations
@@ -22,6 +22,8 @@ class BriefingBuilder:
         calendar_events: list[dict[str, Any]] | None = None,
         reminders: list[str] | None = None,
         patterns: list[RoutinePattern] | None = None,
+        weather: dict[str, Any] | None = None,
+        iot_summary: dict[str, Any] | None = None,
     ) -> ProactiveCandidate:
         """Build a morning briefing from available data.
 
@@ -29,11 +31,19 @@ class BriefingBuilder:
             calendar_events: Today's calendar events (dicts with summary, start_time).
             reminders: Active reminders/timers.
             patterns: Detected routine patterns for today.
+            weather: Weather data (dict with 'display' key for formatted text).
+            iot_summary: Smart home summary (dict with device_count, devices_on).
 
         Returns:
             ProactiveCandidate with formatted briefing.
         """
         sections: list[str] = []
+
+        # Weather section (first, most relevant for morning)
+        if weather:
+            display = weather.get("display", "")
+            if display:
+                sections.append(f"Weather: {display}")
 
         # Calendar section
         if calendar_events:
@@ -46,6 +56,12 @@ class BriefingBuilder:
         if reminders:
             rem_lines = [f"- {r}" for r in reminders]
             sections.append("Reminders:\n" + "\n".join(rem_lines))
+
+        # Smart home section
+        if iot_summary and iot_summary.get("device_count", 0) > 0:
+            on = iot_summary.get("devices_on", 0)
+            total = iot_summary["device_count"]
+            sections.append(f"Smart home: {on} of {total} devices on.")
 
         # Patterns section
         if patterns:

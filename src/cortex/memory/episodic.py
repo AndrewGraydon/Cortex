@@ -182,6 +182,44 @@ class EpisodicMemoryStore:
 
         return patterns
 
+    async def get_recent_events(
+        self, hours_back: int = 24, limit: int = 200,
+    ) -> list[EpisodicEvent]:
+        """Get recent events for memory consolidation.
+
+        Args:
+            hours_back: How many hours of history to retrieve.
+            limit: Maximum events to return.
+        """
+        since = time.time() - (hours_back * 3600)
+        return await self.query_events(since=since, limit=limit)
+
+    async def get_event_clusters(
+        self, hours_back: int = 24, min_count: int = 3,
+    ) -> list[dict[str, Any]]:
+        """Group recent events by (type, content) for consolidation.
+
+        Returns dicts with event_type, content, count, first_seen, last_seen.
+        """
+        events = await self.get_recent_events(hours_back)
+        clusters: dict[tuple[str, str], list[float]] = {}
+        for event in events:
+            key = (event.event_type.value, event.content)
+            clusters.setdefault(key, []).append(event.timestamp)
+
+        result: list[dict[str, Any]] = []
+        for (etype, content), timestamps in clusters.items():
+            if len(timestamps) >= min_count:
+                result.append({
+                    "event_type": etype,
+                    "content": content,
+                    "count": len(timestamps),
+                    "first_seen": min(timestamps),
+                    "last_seen": max(timestamps),
+                })
+        result.sort(key=lambda c: c["count"], reverse=True)
+        return result
+
     async def prune_old_events(self, max_age_days: int = 365) -> int:
         """Delete events older than max_age_days. Returns count deleted."""
         db = self._ensure_started()

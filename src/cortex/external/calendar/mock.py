@@ -64,6 +64,22 @@ class MockCalendarAdapter:
         logger.info("MockCalendarAdapter created event: %s", event.summary)
         return event
 
+    async def get_event(self, uid: str) -> CalendarEvent | None:
+        """Get a single event by UID."""
+        for event in self._events:
+            if event.uid == uid:
+                return event
+        return None
+
+    async def update_event(self, event: CalendarEvent) -> CalendarEvent | None:
+        """Update an existing event by UID. Returns updated event or None."""
+        for i, existing in enumerate(self._events):
+            if existing.uid == event.uid:
+                self._events[i] = event
+                logger.info("MockCalendarAdapter updated event: %s", event.summary)
+                return event
+        return None
+
     async def delete_event(self, uid: str) -> bool:
         """Delete an event by UID. Returns True if found and deleted."""
         before = len(self._events)
