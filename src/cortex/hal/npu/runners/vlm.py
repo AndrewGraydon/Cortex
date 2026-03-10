@@ -22,6 +22,7 @@ Replaces both old Qwen3-1.7B text-only LLM and FastVLM-0.5B stub.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -153,53 +154,73 @@ class VLMRunner:
     async def infer_stream(self, inputs: InferenceInputs) -> AsyncIterator[InferenceOutputs]:
         """Stream tokens via POST /v1/chat/completions with SSE.
 
-        Uses explicit try/finally for response lifecycle instead of ``async with``
-        to prevent GeneratorExit from interrupting httpx stream cleanup when the
-        consumer finishes iterating or the generator is garbage-collected.
+        Uses a background task + asyncio.Queue to isolate the HTTP stream from
+        the async generator lifecycle.  Without this, GeneratorExit thrown into
+        the generator (when the consumer finishes iterating) propagates through
+        ``resp.aiter_lines()`` and kills the HTTP stream before all tokens are
+        read — resulting in 1-character responses.
         """
         self._check_loaded()
         assert self._client is not None
+        client = self._client  # capture for closure (mypy can't narrow self attrs)
 
         prompt = str(inputs.data) if inputs.data is not None else ""
         messages = self._build_messages(prompt, inputs.params)
         body = self._build_request_body(messages, inputs.params, stream=True)
 
-        resp = await self._client.send(
-            self._client.build_request("POST", "/v1/chat/completions", json=body),
-            stream=True,
-        )
-        try:
-            resp.raise_for_status()
+        queue: asyncio.Queue[InferenceOutputs | None] = asyncio.Queue()
+
+        async def _read_sse() -> None:
+            """Read SSE stream in a dedicated task (no generator yields here)."""
             buffer = ""
             emitted_len = 0
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                payload = line[6:].strip()
-                if payload == "[DONE]":
+            async with client.stream("POST", "/v1/chat/completions", json=body) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:].strip()
+                    if payload == "[DONE]":
+                        break
+
+                    chunk = json.loads(payload)
+                    delta = chunk["choices"][0].get("delta", {})
+                    content = delta.get("content", "")
+                    finish_reason = chunk["choices"][0].get("finish_reason")
+
+                    if content:
+                        buffer += content
+                        safe = self._safe_clean(buffer)
+                        new_text = safe[emitted_len:]
+                        emitted_len = len(safe)
+                        if new_text:
+                            done = finish_reason is not None
+                            await queue.put(
+                                InferenceOutputs(
+                                    data=new_text,
+                                    metadata={
+                                        "is_final": done,
+                                        "finish_reason": finish_reason,
+                                    },
+                                )
+                            )
+            # Signal end of stream
+            await queue.put(None)
+
+        task = asyncio.create_task(_read_sse())
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
                     break
-
-                chunk = json.loads(payload)
-                delta = chunk["choices"][0].get("delta", {})
-                content = delta.get("content", "")
-                finish_reason = chunk["choices"][0].get("finish_reason")
-
-                if content:
-                    buffer += content
-                    safe = self._safe_clean(buffer)
-                    new_text = safe[emitted_len:]
-                    emitted_len = len(safe)
-                    if new_text:
-                        done = finish_reason is not None
-                        yield InferenceOutputs(
-                            data=new_text,
-                            metadata={
-                                "is_final": done,
-                                "finish_reason": finish_reason,
-                            },
-                        )
+                yield chunk
+            # Ensure the task completes (propagate any exception)
+            await task
         finally:
-            await resp.aclose()
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
     async def reset_context(self, system_prompt: str | None = None) -> None:
         """Reset conversation context.
