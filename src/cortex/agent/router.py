@@ -55,7 +55,8 @@ BUILTIN_PATTERNS = [
         IntentType.GREETING,
         [
             r"^(hey|hi|hello|howdy|good\s+(morning|afternoon|evening)|"
-            r"what'?s\s+up|yo|sup|greetings?)\.?!?\s*$",
+            r"what'?s\s+up|yo|sup|greetings?)"
+            r"(\s+there|\s+cortex|\s+buddy|\s+friend)?[.,!]?\s*$",
         ],
     ),
     # Farewell
