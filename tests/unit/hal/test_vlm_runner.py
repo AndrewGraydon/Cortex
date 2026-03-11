@@ -50,14 +50,14 @@ class TestMessageBuilding:
         messages = runner._build_messages("Hello", {})
         assert len(messages) == 2
         assert messages[0] == {"role": "system", "content": "You are helpful."}
-        assert messages[1] == {"role": "user", "content": "Hello"}
+        assert messages[1] == {"role": "user", "content": "Hello /no_think"}
 
     def test_text_only_no_system_prompt(self) -> None:
         runner = VLMRunner()
         runner._system_prompt = ""
         messages = runner._build_messages("Hello", {})
         assert len(messages) == 1
-        assert messages[0] == {"role": "user", "content": "Hello"}
+        assert messages[0] == {"role": "user", "content": "Hello /no_think"}
 
     def test_vision_message_with_image(self) -> None:
         runner = VLMRunner()
@@ -96,7 +96,7 @@ class TestMessagesPassthrough:
         assert len(messages) == 4
         assert messages[0]["role"] == "system"
         assert messages[0]["content"] == "Custom system prompt"
-        assert messages[-1]["content"] == "How are you?"
+        assert messages[-1]["content"] == "How are you? /no_think"
 
     def test_system_prompt_prepended_if_missing(self) -> None:
         runner = VLMRunner()

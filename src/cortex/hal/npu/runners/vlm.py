@@ -258,6 +258,11 @@ class VLMRunner:
         1. Pre-built messages: pass params["messages"] for multi-turn context
         2. Vision: pass params["image_base64"] for image+text
         3. Text-only: default, builds [system, user] from prompt string
+
+        Appends /no_think to the last user message to disable Qwen3's thinking
+        mode. axllm hardcodes set_think_in_prompt(true) with no config option,
+        so we use Qwen3's soft switch. Without this, the model generates
+        <think>...</think> tags that consume the entire 2,047 token budget.
         """
         # Pre-built messages passthrough (multi-turn context from pipeline)
         if "messages" in params:
@@ -265,6 +270,7 @@ class VLMRunner:
             # Ensure system prompt is present as first message
             if pre_built and pre_built[0].get("role") != "system" and self._system_prompt:
                 pre_built.insert(0, {"role": "system", "content": self._system_prompt})
+            self._append_no_think(pre_built)
             return pre_built
 
         messages: list[dict[str, Any]] = []
@@ -288,7 +294,22 @@ class VLMRunner:
             # Text-only message
             messages.append({"role": "user", "content": prompt})
 
+        self._append_no_think(messages)
         return messages
+
+    @staticmethod
+    def _append_no_think(messages: list[dict[str, Any]]) -> None:
+        """Append /no_think to the last user message.
+
+        Qwen3's soft switch: /no_think in the last user message disables
+        thinking mode for that turn. Must be at the end of user content.
+        """
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str) and "/no_think" not in content:
+                    msg["content"] = content + " /no_think"
+                break
 
     def _build_request_body(
         self,

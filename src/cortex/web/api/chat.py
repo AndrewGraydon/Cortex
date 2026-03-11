@@ -77,10 +77,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
             if not message:
                 continue
 
-            # Record user message
-            chat_session.add_user_message(message)
-
-            # Send user bubble
+            # Send user bubble immediately (don't add to history yet —
+            # build_messages() adds user_message as the final message)
             user_html = _render_user_bubble(message)
             await websocket.send_text(user_html)
 
@@ -93,22 +91,24 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     response = await processor.process(message, chat_session.voice_session)
 
                     if response.used_llm and response.llm_messages:
-                        # LLM fallback: generate response via NPU
+                        # LLM path: generate response via NPU
                         reply = await _generate_llm_response(
-                            services,
-                            message,
-                            response.llm_messages,
-                            chat_session,
+                            services, message, response.llm_messages,
                         )
                     else:
-                        reply = chat_session.process_response(response)
+                        reply = response.text or ""
                 except Exception:
                     logger.exception("AgentProcessor error for session %s", session_id)
                     reply = "Sorry, I encountered an error processing your request."
-                    chat_session.add_assistant_message(reply)
             else:
                 # No processor — echo for testing
                 reply = f"Echo: {message}"
+
+            # Add user + assistant to history AFTER processing
+            # (build_messages() adds user_message as the final message,
+            # so history must not contain it during processing)
+            chat_session.add_user_message(message)
+            if reply:
                 chat_session.add_assistant_message(reply)
 
             # Send assistant bubble
@@ -127,7 +127,6 @@ async def _generate_llm_response(
     services: Any,
     message: str,
     llm_messages: list[dict[str, str]],
-    chat_session: WebChatSession,
 ) -> str:
     """Generate an LLM response via NPU inference."""
     npu = services.get("npu")
@@ -140,13 +139,9 @@ async def _generate_llm_response(
             llm_handle,
             InferenceInputs(data=message, params={"messages": llm_messages}),
         )
-        reply = str(result.data)
-        chat_session.add_assistant_message(reply)
-        return reply
+        return str(result.data)
 
-    reply = "I'd like to help, but my language model isn't available right now."
-    chat_session.add_assistant_message(reply)
-    return reply
+    return "I'd like to help, but my language model isn't available right now."
 
 
 def _render_user_bubble(text: str) -> str:
