@@ -194,14 +194,15 @@ class VoicePipeline:
                 self._session = None
                 return metrics
 
-            # Add user message to history
-            self._session.history.append({"role": "user", "content": asr_result.text})
-
             # --- LLM → TTS (streaming) ---
             await self._display.set_state(DisplayState.THINKING, "Thinking...")
             response_text = await self._run_llm_with_retry(asr_result.text, metrics)
 
-            # Add assistant response to history
+            # Add user + assistant to history AFTER LLM call
+            # (ContextAssembler.build_messages already includes user_message as
+            # the final message, so adding it to history before the call would
+            # cause the user message to appear twice in the prompt)
+            self._session.history.append({"role": "user", "content": asr_result.text})
             if response_text:
                 self._session.history.append({"role": "assistant", "content": response_text})
 
