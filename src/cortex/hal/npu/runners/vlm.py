@@ -327,13 +327,14 @@ class VLMRunner:
             # 2047 is the model's full context window (max_token_len from config).
             # axllm will stop at KV cache capacity regardless of this value.
             "max_tokens": params.get("max_tokens", 2047),
+            # Repetition penalty prevents the 2B model from repeating itself
+            # in multi-turn conversations (verified via curl testing).
+            "repetition_penalty": params.get("repetition_penalty", 1.3),
         }
         if "temperature" in params:
             body["temperature"] = params["temperature"]
         if "top_p" in params:
             body["top_p"] = params["top_p"]
-        if "repetition_penalty" in params:
-            body["repetition_penalty"] = params["repetition_penalty"]
         return body
 
     @staticmethod
