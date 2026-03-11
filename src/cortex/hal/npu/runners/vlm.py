@@ -302,13 +302,15 @@ class VLMRunner:
             "model": self._model_name,
             "messages": messages,
             "stream": stream,
+            # axllm defaults to very few tokens if max_tokens is not set.
+            # 2047 is the model's full context window (max_token_len from config).
+            # axllm will stop at KV cache capacity regardless of this value.
+            "max_tokens": params.get("max_tokens", 2047),
         }
         if "temperature" in params:
             body["temperature"] = params["temperature"]
         if "top_p" in params:
             body["top_p"] = params["top_p"]
-        if "max_tokens" in params:
-            body["max_tokens"] = params["max_tokens"]
         if "repetition_penalty" in params:
             body["repetition_penalty"] = params["repetition_penalty"]
         return body
