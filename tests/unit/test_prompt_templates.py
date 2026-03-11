@@ -15,11 +15,11 @@ from cortex.reasoning.types import ToolSchema
 class TestSystemPromptV1:
     def test_contains_identity(self) -> None:
         assert "Cortex" in SYSTEM_PROMPT_V1
-        assert "Raspberry Pi" in SYSTEM_PROMPT_V1
 
     def test_concise(self) -> None:
         tokens = estimate_tokens(SYSTEM_PROMPT_V1)
-        assert tokens <= 80  # Should be well under 100 tokens
+        # Must be very short — complex prompts trigger Qwen3's thinking mode
+        assert tokens <= 20
 
 
 class TestToolInstruction:

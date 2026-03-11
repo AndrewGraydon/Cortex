@@ -8,16 +8,10 @@ from __future__ import annotations
 
 from cortex.reasoning.types import ToolSchema
 
-# Base system prompt (~55 tokens) — always included as P1
-SYSTEM_PROMPT_V1 = """\
-You are Cortex, a helpful voice assistant running locally on a Raspberry Pi.
-
-Guidelines:
-- Be concise and friendly
-- Keep responses under 50 words when possible
-- Voice responses should sound natural when spoken aloud
-- If unsure, say so honestly
-- For time-sensitive questions, note your knowledge may not be current"""
+# Base system prompt (~15 tokens) — always included as P1
+# Keep this VERY short: Qwen3-VL-2B's thinking mode activates with complex
+# system prompts, consuming the entire 2,047 token budget on <think> tags.
+SYSTEM_PROMPT_V1 = "You are Cortex, a helpful voice assistant. Be concise."
 
 # Tool-calling instruction block (~60 tokens) — appended when tools are available
 TOOL_INSTRUCTION = """\
