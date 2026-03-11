@@ -92,6 +92,12 @@ class AgentProcessor:
                 intent_id="farewell",
             )
 
+        if decision.intent_type == IntentType.GREETING:
+            return AgentResponse(
+                text="Hey! What can I help you with?",
+                intent_id="greeting",
+            )
+
         if decision.intent_type == IntentType.UTILITY:
             return await self._handle_utility(decision, text)
 

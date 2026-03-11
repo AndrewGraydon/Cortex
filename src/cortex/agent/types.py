@@ -13,6 +13,7 @@ class IntentType(enum.Enum):
     UTILITY = "utility"  # Direct handler, no LLM
     LLM = "llm"  # Requires LLM inference
     FAREWELL = "farewell"  # End session
+    GREETING = "greeting"  # Direct response, no LLM (avoids greeting loop)
 
 
 @dataclass(frozen=True)

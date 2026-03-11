@@ -177,6 +177,15 @@ class VoicePipeline:
                     self._session = None
                     return metrics
 
+                # Greeting — speak but don't add to LLM history.
+                # Greeting exchanges in history cause Qwen3-VL-2B to
+                # repeat greetings instead of answering questions.
+                if agent_resp.intent_id == "greeting":
+                    await self._speak(agent_resp.text, metrics)
+                    self._session.turn_count += 1
+                    self._session.metrics.append(metrics)
+                    return metrics
+
                 # Utility — direct response, no LLM
                 if not agent_resp.used_llm and agent_resp.text:
                     self._session.history.append({"role": "user", "content": asr_result.text})

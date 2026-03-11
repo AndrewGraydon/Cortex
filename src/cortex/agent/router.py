@@ -48,6 +48,16 @@ class IntentPattern:
 
 # Built-in intent patterns
 BUILTIN_PATTERNS = [
+    # Greeting — handled directly to avoid LLM generating a sticky greeting
+    # pattern that causes Qwen3-VL-2B to repeat greetings in multi-turn.
+    IntentPattern(
+        "greeting",
+        IntentType.GREETING,
+        [
+            r"^(hey|hi|hello|howdy|good\s+(morning|afternoon|evening)|"
+            r"what'?s\s+up|yo|sup|greetings?)\.?!?\s*$",
+        ],
+    ),
     # Farewell
     IntentPattern(
         "farewell",

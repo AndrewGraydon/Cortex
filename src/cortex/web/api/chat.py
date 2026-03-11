@@ -106,10 +106,14 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
             # Add user + assistant to history AFTER processing
             # (build_messages() adds user_message as the final message,
-            # so history must not contain it during processing)
-            chat_session.add_user_message(message)
-            if reply:
-                chat_session.add_assistant_message(reply)
+            # so history must not contain it during processing).
+            # Skip greetings: greeting exchanges in LLM history cause
+            # Qwen3-VL-2B to repeat greetings instead of answering.
+            is_greeting = processor and hasattr(response, "intent_id") and response.intent_id == "greeting"
+            if not is_greeting:
+                chat_session.add_user_message(message)
+                if reply:
+                    chat_session.add_assistant_message(reply)
 
             # Send assistant bubble
             assistant_html = _render_assistant_bubble(reply)
