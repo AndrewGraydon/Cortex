@@ -292,23 +292,43 @@ class VoicePipeline:
         return InferenceInputs(data=user_text)
 
     async def _run_llm_tts_streaming(self, user_text: str, metrics: LatencyMetrics) -> str:
-        """Get LLM response, then TTS sentence-by-sentence.
+        """Stream LLM tokens, detect sentences, TTS each sentence as it completes.
 
-        Uses non-streaming infer() because axllm's SSE streaming produces
-        truncated responses (think tags consume tokens, streaming cleanup
-        issues). Non-streaming works reliably per curl testing. TTS is still
-        done per-sentence for natural playback pacing.
+        Tokens arrive via infer_stream(). The sentence detector buffers tokens
+        until a sentence boundary is found, then TTS synthesizes and plays that
+        sentence while the LLM continues generating. This gives much better
+        time-to-first-audio than waiting for the full response.
         """
         assert self._llm_handle is not None
         assert self._tts_handle is not None
 
         inputs = self._build_llm_inputs(user_text)
 
-        result = await self._npu.infer(self._llm_handle, inputs)
-        full_response = str(result.data) if result.data else ""
+        full_response = ""
+        self._sentence_detector.reset()
+        first_token = True
 
-        metrics.llm_first_token_ts = _now_ms()
+        async for output in self._npu.infer_stream(self._llm_handle, inputs):
+            token = str(output.data) if output.data else ""
+            if not token:
+                continue
+
+            if first_token:
+                metrics.llm_first_token_ts = _now_ms()
+                first_token = False
+
+            full_response += token
+
+            # Feed token to sentence detector — yields complete sentences
+            for sentence in self._sentence_detector.feed(token):
+                await self._synthesize_and_play(sentence, metrics)
+
         metrics.llm_end_ts = _now_ms()
+
+        # Flush any remaining partial sentence
+        remaining = self._sentence_detector.flush()
+        if remaining:
+            await self._synthesize_and_play(remaining, metrics)
 
         if full_response:
             logger.info("LLM response (%d chars): %s", len(full_response), full_response[:200])
@@ -321,17 +341,6 @@ class VoicePipeline:
             "ttfa_ms": f"{metrics.ttfa_ms:.0f}",
         }
         logger.info("Metrics: %s", log_metrics)
-
-        # TTS sentence-by-sentence for natural pacing
-        self._sentence_detector.reset()
-        sentences = self._sentence_detector.feed(full_response)
-        remaining = self._sentence_detector.flush()
-        all_sentences = list(sentences)
-        if remaining:
-            all_sentences.append(remaining)
-
-        for sentence in all_sentences:
-            await self._synthesize_and_play(sentence, metrics)
 
         return full_response
 
