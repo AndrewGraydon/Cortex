@@ -292,34 +292,22 @@ class VoicePipeline:
         return InferenceInputs(data=user_text)
 
     async def _run_llm_tts_streaming(self, user_text: str, metrics: LatencyMetrics) -> str:
-        """Stream LLM → sentence detect → TTS → playback."""
+        """Get LLM response, then TTS sentence-by-sentence.
+
+        Uses non-streaming infer() because axllm's SSE streaming produces
+        truncated responses (think tags consume tokens, streaming cleanup
+        issues). Non-streaming works reliably per curl testing. TTS is still
+        done per-sentence for natural playback pacing.
+        """
         assert self._llm_handle is not None
         assert self._tts_handle is not None
 
-        full_response = ""
-        first_token = True
-        self._sentence_detector.reset()
-
         inputs = self._build_llm_inputs(user_text)
 
-        async for chunk in self._npu.infer_stream(self._llm_handle, inputs):
-            token_text = str(chunk.data)
-            full_response += token_text
+        result = await self._npu.infer(self._llm_handle, inputs)
+        full_response = str(result.data) if result.data else ""
 
-            if first_token:
-                metrics.llm_first_token_ts = _now_ms()
-                first_token = False
-
-            # Feed tokens to sentence detector
-            sentences = self._sentence_detector.feed(token_text)
-            for sentence in sentences:
-                await self._synthesize_and_play(sentence, metrics)
-
-        # Flush any remaining text
-        remaining = self._sentence_detector.flush()
-        if remaining:
-            await self._synthesize_and_play(remaining, metrics)
-
+        metrics.llm_first_token_ts = _now_ms()
         metrics.llm_end_ts = _now_ms()
 
         if full_response:
@@ -333,6 +321,17 @@ class VoicePipeline:
             "ttfa_ms": f"{metrics.ttfa_ms:.0f}",
         }
         logger.info("Metrics: %s", log_metrics)
+
+        # TTS sentence-by-sentence for natural pacing
+        self._sentence_detector.reset()
+        sentences = self._sentence_detector.feed(full_response)
+        remaining = self._sentence_detector.flush()
+        all_sentences = list(sentences)
+        if remaining:
+            all_sentences.append(remaining)
+
+        for sentence in all_sentences:
+            await self._synthesize_and_play(sentence, metrics)
 
         return full_response
 
