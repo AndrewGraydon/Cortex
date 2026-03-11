@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from cortex.reasoning.types import ToolSchema
 
-# Base system prompt (~15 tokens) — always included as P1
-# Keep this VERY short: Qwen3-VL-2B's thinking mode activates with complex
-# system prompts, consuming the entire 2,047 token budget on <think> tags.
-SYSTEM_PROMPT_V1 = "You are Cortex, a helpful voice assistant. Be concise."
+# Base system prompt — always included as P1
+# Keep VERY short: Qwen3-VL-2B treats "Be concise." as "only greet" in
+# multi-turn conversations. The 2,047 token context window and
+# repetition_penalty naturally keep responses reasonable.
+SYSTEM_PROMPT_V1 = "You are Cortex, a helpful assistant."
 
 # Tool-calling instruction block (~60 tokens) — appended when tools are available
 TOOL_INSTRUCTION = """\

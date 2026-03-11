@@ -33,7 +33,7 @@ logger = structlog.get_logger()
 
 # Default model paths on Pi
 DEFAULT_MODELS_DIR = Path.home() / "models"
-DEFAULT_SYSTEM_PROMPT = "You are Cortex, a helpful voice assistant. Be concise."
+DEFAULT_SYSTEM_PROMPT = "You are Cortex, a helpful assistant."
 
 
 class CortexService:
