@@ -93,7 +93,7 @@ class VLMRunner:
         self._model_path = model_path
         self._api_port = config.get("api_port", DEFAULT_API_PORT)
         self._memory_mb = config.get("memory_mb", 1771)
-        self._system_prompt = config.get("system_prompt", "/no_think\nYou are a helpful assistant.")
+        self._system_prompt = config.get("system_prompt", "You are a helpful assistant.")
 
         try:
             await self._start_axllm(model_path, config)
@@ -171,7 +171,7 @@ class VLMRunner:
         messages = self._build_messages(prompt, inputs.params)
         body = self._build_request_body(messages, inputs.params, stream=True)
 
-        logger.info("VLM stream request: %d messages, user=%s", len(messages), prompt[:100])
+        logger.info("VLM stream body: %s", json.dumps(body, ensure_ascii=False)[:800])
 
         queue: asyncio.Queue[InferenceOutputs | None] = asyncio.Queue()
 
@@ -257,6 +257,10 @@ class VLMRunner:
         1. Pre-built messages: pass params["messages"] for multi-turn context
         2. Vision: pass params["image_base64"] for image+text
         3. Text-only: default, builds [system, user] from prompt string
+
+        Appends /no_think to the last user message to disable Qwen3's thinking
+        mode (saves tokens and latency). The directive must be in the user
+        message — axllm's chat template ignores it in system messages.
         """
         # Pre-built messages passthrough (multi-turn context from pipeline)
         if "messages" in params:
@@ -264,6 +268,7 @@ class VLMRunner:
             # Ensure system prompt is present as first message
             if pre_built and pre_built[0].get("role") != "system" and self._system_prompt:
                 pre_built.insert(0, {"role": "system", "content": self._system_prompt})
+            self._inject_no_think(pre_built)
             return pre_built
 
         messages: list[dict[str, Any]] = []
@@ -285,7 +290,7 @@ class VLMRunner:
             messages.append({"role": "user", "content": content})
         else:
             # Text-only message
-            messages.append({"role": "user", "content": prompt})
+            messages.append({"role": "user", "content": f"/no_think\n{prompt}"})
 
         return messages
 
@@ -311,6 +316,18 @@ class VLMRunner:
         if "repetition_penalty" in params:
             body["repetition_penalty"] = params["repetition_penalty"]
         return body
+
+    @staticmethod
+    def _inject_no_think(messages: list[dict[str, Any]]) -> None:
+        """Prepend /no_think to the last user message content (in-place).
+
+        Qwen3 models recognize /no_think as a soft switch to disable thinking
+        mode. Must be in a user message — axllm ignores it in system messages.
+        """
+        for msg in reversed(messages):
+            if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+                msg["content"] = f"/no_think\n{msg['content']}"
+                break
 
     @staticmethod
     def _strip_think_tags(text: str) -> str:

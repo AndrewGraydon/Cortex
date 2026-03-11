@@ -10,7 +10,6 @@ from cortex.reasoning.types import ToolSchema
 
 # Base system prompt (~55 tokens) — always included as P1
 SYSTEM_PROMPT_V1 = """\
-/no_think
 You are Cortex, a helpful voice assistant running locally on a Raspberry Pi.
 
 Guidelines:
