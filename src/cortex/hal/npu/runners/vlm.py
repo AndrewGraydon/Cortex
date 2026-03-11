@@ -304,9 +304,10 @@ class VLMRunner:
             "messages": messages,
             "stream": stream,
             # axllm defaults to very few tokens if max_tokens is not set.
-            # 2047 is the model's full context window (max_token_len from config).
-            # axllm will stop at KV cache capacity regardless of this value.
-            "max_tokens": params.get("max_tokens", 2047),
+            # 2047 is the full context window (input + output combined).
+            # Cap output at 1024 to leave room for input context and prevent
+            # think tags from consuming the entire generation budget.
+            "max_tokens": params.get("max_tokens", 1024),
             # Repetition penalty prevents the 2B model from repeating itself
             # in multi-turn conversations (verified via curl testing).
             "repetition_penalty": params.get("repetition_penalty", 1.3),

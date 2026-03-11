@@ -56,10 +56,11 @@ class TestBasicAssembly:
 
 
 class TestBudgetEnforcement:
-    def test_fits_within_default_budget(self) -> None:
+    def test_fits_within_input_budget(self) -> None:
         asm = ContextAssembler()
         result = asm.assemble("Hello, how are you?")
-        assert result.estimated_tokens <= 2047
+        # Input budget is max_tokens - reserved_output_tokens (2047 - 1024 = 1023)
+        assert result.estimated_tokens <= ContextBudget().input_budget
 
     def test_with_all_components_fits(self) -> None:
         tools = [
@@ -83,7 +84,7 @@ class TestBudgetEnforcement:
             summary="Setting up a timer.",
             history=history,
         )
-        assert result.estimated_tokens <= 2047
+        assert result.estimated_tokens <= ContextBudget().input_budget
         assert result.has_tools
         assert result.has_memories
         assert result.has_summary
@@ -107,10 +108,10 @@ class TestBudgetEnforcement:
         assert result.turns_included < 2
 
     def test_custom_budget(self) -> None:
-        budget = ContextBudget(max_tokens=500)
+        budget = ContextBudget(max_tokens=500, reserved_output_tokens=200)
         asm = ContextAssembler(budget=budget)
         result = asm.assemble("Hello")
-        assert result.estimated_tokens <= 500
+        assert result.estimated_tokens <= budget.input_budget  # 300
 
 
 class TestPriorityOrder:

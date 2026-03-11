@@ -55,7 +55,7 @@ class ContextAssembler:
         Returns:
             AssembledPrompt with the full text and metadata.
         """
-        max_tokens = self._budget.max_tokens
+        input_budget = self._budget.input_budget
         used_tokens = 0
 
         # --- P1: System prompt (always included) ---
@@ -87,7 +87,7 @@ class ContextAssembler:
         if knowledge_passage:
             knowledge_block = f"\n{knowledge_passage}"
             knowledge_tokens = estimate_tokens(knowledge_block)
-            if used_tokens + knowledge_tokens <= max_tokens - self._budget.user_message_tokens:
+            if used_tokens + knowledge_tokens <= input_budget - self._budget.user_message_tokens:
                 middle_parts.append(knowledge_block)
                 used_tokens += knowledge_tokens
 
@@ -95,7 +95,7 @@ class ContextAssembler:
         if summary:
             summary_block = f"\n[Summary] {summary}"
             summary_tokens = estimate_tokens(summary_block)
-            if used_tokens + summary_tokens <= max_tokens - self._budget.user_message_tokens:
+            if used_tokens + summary_tokens <= input_budget - self._budget.user_message_tokens:
                 middle_parts.append(summary_block)
                 used_tokens += summary_tokens
                 has_summary = True
@@ -108,7 +108,7 @@ class ContextAssembler:
                 content = turn.get("content", "")
                 turn_block = f"\n{role.capitalize()}: {content}"
                 turn_tokens = estimate_tokens(turn_block)
-                if used_tokens + turn_tokens <= max_tokens - self._budget.user_message_tokens:
+                if used_tokens + turn_tokens <= input_budget - self._budget.user_message_tokens:
                     history_parts.insert(0, turn_block)
                     used_tokens += turn_tokens
                     turns_included += 1
@@ -127,11 +127,11 @@ class ContextAssembler:
 
         total_tokens = estimate_tokens(prompt_text)
 
-        if total_tokens > max_tokens:
+        if total_tokens > input_budget:
             logger.warning(
-                "Prompt exceeds budget: %d > %d tokens (estimate)",
+                "Prompt exceeds input budget: %d > %d tokens (estimate)",
                 total_tokens,
-                max_tokens,
+                input_budget,
             )
 
         return AssembledPrompt(
@@ -163,7 +163,7 @@ class ContextAssembler:
             List of {"role": ..., "content": ...} dicts:
             [system, *history_turns, user].
         """
-        max_tokens = self._budget.max_tokens
+        input_budget = self._budget.input_budget
         used_tokens = 0
 
         # P1: System prompt (always included)
@@ -177,7 +177,7 @@ class ContextAssembler:
         if summary:
             summary_block = f"\n\n[Conversation summary] {summary}"
             summary_tokens = estimate_tokens(summary_block)
-            if used_tokens + summary_tokens <= max_tokens - self._budget.user_message_tokens:
+            if used_tokens + summary_tokens <= input_budget - self._budget.user_message_tokens:
                 system_content += summary_block
                 used_tokens += summary_tokens
 
@@ -187,7 +187,7 @@ class ContextAssembler:
             for turn in reversed(history):
                 content = turn.get("content", "")
                 turn_tokens = estimate_tokens(content)
-                if used_tokens + turn_tokens <= max_tokens - self._budget.user_message_tokens:
+                if used_tokens + turn_tokens <= input_budget - self._budget.user_message_tokens:
                     history_messages.insert(0, turn)
                     used_tokens += turn_tokens
                 else:
@@ -201,9 +201,10 @@ class ContextAssembler:
         messages.append({"role": "user", "content": user_message})
 
         logger.debug(
-            "Context: %d messages, ~%d tokens (budget %d)",
+            "Context: %d messages, ~%d input tokens (budget %d, output reserve %d)",
             len(messages),
             used_tokens,
-            max_tokens,
+            input_budget,
+            self._budget.reserved_output_tokens,
         )
         return messages

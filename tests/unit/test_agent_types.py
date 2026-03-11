@@ -16,7 +16,7 @@ from cortex.agent.types import (
 
 class TestIntentType:
     def test_all_types_exist(self) -> None:
-        expected = {"utility", "llm", "farewell"}
+        expected = {"utility", "llm", "farewell", "greeting"}
         actual = {t.value for t in IntentType}
         assert actual == expected
 

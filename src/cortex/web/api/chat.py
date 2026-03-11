@@ -109,7 +109,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
             # so history must not contain it during processing).
             # Skip greetings: greeting exchanges in LLM history cause
             # Qwen3-VL-2B to repeat greetings instead of answering.
-            is_greeting = processor and hasattr(response, "intent_id") and response.intent_id == "greeting"
+            is_greeting = (
+                processor
+                and hasattr(response, "intent_id")
+                and response.intent_id == "greeting"
+            )
             if not is_greeting:
                 chat_session.add_user_message(message)
                 if reply:

@@ -35,16 +35,24 @@ class ToolSchema:
 class ContextBudget:
     """Token budget allocation for prompt construction.
 
-    Based on 2,047 token hard limit for local NPU.
+    Based on 2,047 token hard limit for local NPU (input + output combined).
+    We reserve tokens for output generation (including invisible think tags)
+    so that growing conversation history doesn't starve the model's response.
     """
 
     max_tokens: int = 2047
+    reserved_output_tokens: int = 1024
     system_prompt_tokens: int = 180
     tool_description_tokens: int = 100
     memory_tokens: int = 120
     summary_tokens: int = 100
     recent_turns_tokens: int = 200
     user_message_tokens: int = 200
+
+    @property
+    def input_budget(self) -> int:
+        """Max tokens available for input (system + history + user)."""
+        return max(0, self.max_tokens - self.reserved_output_tokens)
 
     @property
     def generation_budget(self) -> int:

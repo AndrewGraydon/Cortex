@@ -163,6 +163,8 @@ class TestRequestBodyBuilding:
         assert body["model"] == "default"
         assert body["messages"] == messages
         assert body["stream"] is False
+        assert body["max_tokens"] == 1024  # Reserve room for output in 2047 context
+        assert body["repetition_penalty"] == 1.3
         assert "temperature" not in body
 
     def test_streaming_body(self) -> None:
