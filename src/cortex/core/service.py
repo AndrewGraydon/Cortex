@@ -157,7 +157,7 @@ class CortexService:
             await display.start()
             self._display = display
             logger.info("Display: using WhisplayDisplayService")
-        except (ImportError, RuntimeError, OSError) as exc:
+        except Exception as exc:
             self._display = MockDisplayService()
             logger.warning("Display: falling back to mock", reason=str(exc))
 
@@ -169,7 +169,7 @@ class CortexService:
             await button.start()
             self._button = button
             logger.info("Button: using GpioButtonService")
-        except (ImportError, RuntimeError, OSError) as exc:
+        except Exception as exc:
             self._button = MockButtonService()
             logger.warning("Button: falling back to mock", reason=str(exc))
 
