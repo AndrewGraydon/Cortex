@@ -303,19 +303,19 @@ class VLMRunner:
             "model": self._model_name,
             "messages": messages,
             "stream": stream,
-            # axllm defaults to very few tokens if max_tokens is not set.
-            # 2047 is the full context window (input + output combined).
-            # Cap output at 1024 to leave room for input context and prevent
-            # think tags from consuming the entire generation budget.
-            "max_tokens": params.get("max_tokens", 1024),
+            # Keep max_tokens moderate to prevent degenerate long outputs.
+            # The 2B model can waste tokens on repetition if given too much room.
+            "max_tokens": params.get("max_tokens", 512),
             # Repetition penalty prevents the 2B model from repeating itself
             # in multi-turn conversations (verified via curl testing).
             "repetition_penalty": params.get("repetition_penalty", 1.3),
+            # Temperature + top_p are critical for Qwen3-VL-2B quality.
+            # Without them, greedy decoding causes degenerate outputs
+            # (single-word answers, topic confusion, repetition loops).
+            # Values match post_config.json defaults for this model.
+            "temperature": params.get("temperature", 0.7),
+            "top_p": params.get("top_p", 0.8),
         }
-        if "temperature" in params:
-            body["temperature"] = params["temperature"]
-        if "top_p" in params:
-            body["top_p"] = params["top_p"]
         return body
 
     @staticmethod

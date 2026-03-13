@@ -9,10 +9,15 @@ from __future__ import annotations
 from cortex.reasoning.types import ToolSchema
 
 # Base system prompt — always included as P1
-# Keep VERY short: Qwen3-VL-2B treats "Be concise." as "only greet" in
-# multi-turn conversations. The 2,047 token context window and
-# repetition_penalty naturally keep responses reasonable.
-SYSTEM_PROMPT_V1 = "You are Cortex, a helpful assistant."
+# Tuned for Qwen3-VL-2B multi-turn stability:
+# - "Answer questions directly" prevents greeting loops
+# - "Always answer the latest question" anchors multi-turn focus
+# - Kept short (~25 tokens) to preserve context budget
+SYSTEM_PROMPT_V1 = (
+    "You are Cortex, a helpful voice assistant. "
+    "Answer questions directly and accurately. "
+    "Always answer the latest question."
+)
 
 # Tool-calling instruction block (~60 tokens) — appended when tools are available
 TOOL_INSTRUCTION = """\

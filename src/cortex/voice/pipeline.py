@@ -63,7 +63,11 @@ class VoicePipeline:
         audio: Any,
         display: Any,
         button: Any,
-        system_prompt: str = "You are Cortex, a helpful voice assistant. Be concise.",
+        system_prompt: str = (
+            "You are Cortex, a helpful voice assistant. "
+            "Answer questions directly and accurately. "
+            "Always answer the latest question."
+        ),
         agent_processor: Any = None,
         context_assembler: Any = None,
     ) -> None:
@@ -275,20 +279,45 @@ class VoicePipeline:
         )
 
     async def _run_llm_with_retry(self, user_text: str, metrics: LatencyMetrics) -> str:
-        """Run LLM → TTS streaming with retry on LLM failure."""
+        """Run LLM → TTS streaming with retry on failure or degenerate output.
+
+        Retries on both exceptions and degenerate responses (single-word,
+        repeated characters, etc.) which the 2B model can produce.
+        """
         for attempt in range(LLM_MAX_RETRIES + 1):
             try:
-                return await self._run_llm_tts_streaming(user_text, metrics)
+                response = await self._run_llm_tts_streaming(user_text, metrics)
+                if not self._is_degenerate(response):
+                    return response
+                logger.warning(
+                    "Degenerate response (attempt %d): %.50s",
+                    attempt + 1,
+                    response,
+                )
+                if attempt >= LLM_MAX_RETRIES:
+                    return response  # return it anyway on last attempt
             except Exception:
-                if attempt < LLM_MAX_RETRIES:
-                    logger.warning("LLM failed (attempt %d), retrying...", attempt + 1)
-                    await asyncio.sleep(0.5)
-                else:
+                if attempt >= LLM_MAX_RETRIES:
                     logger.exception("LLM failed after %d retries", LLM_MAX_RETRIES + 1)
                     apology = "Sorry, I'm having trouble thinking right now. Please try again."
                     await self._speak(apology, metrics)
                     return apology
+                logger.warning("LLM failed (attempt %d), retrying...", attempt + 1)
+            await asyncio.sleep(0.5)
         return ""  # unreachable, satisfies mypy
+
+    @staticmethod
+    def _is_degenerate(text: str) -> bool:
+        """Detect degenerate LLM outputs from the 2B model.
+
+        Catches single-character/word answers, repeated character spam,
+        and excessively short responses that indicate model confusion.
+        """
+        stripped = text.strip()
+        if len(stripped) <= 2:
+            return True
+        # Repeated single character (e.g. "222222..." or "IIIII...")
+        return len(set(stripped.replace(" ", ""))) <= 2 and len(stripped) > 10
 
     def _build_llm_inputs(self, user_text: str) -> InferenceInputs:
         """Build LLM inference inputs with conversation history if available."""

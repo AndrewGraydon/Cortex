@@ -59,7 +59,7 @@ class TestBudgetEnforcement:
     def test_fits_within_input_budget(self) -> None:
         asm = ContextAssembler()
         result = asm.assemble("Hello, how are you?")
-        # Input budget is max_tokens - reserved_output_tokens (2047 - 1024 = 1023)
+        # Input budget is max_tokens - reserved_output_tokens (2047 - 512 = 1535)
         assert result.estimated_tokens <= ContextBudget().input_budget
 
     def test_with_all_components_fits(self) -> None:

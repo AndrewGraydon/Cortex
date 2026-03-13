@@ -41,7 +41,7 @@ class ContextBudget:
     """
 
     max_tokens: int = 2047
-    reserved_output_tokens: int = 1024
+    reserved_output_tokens: int = 512
     system_prompt_tokens: int = 180
     tool_description_tokens: int = 100
     memory_tokens: int = 120

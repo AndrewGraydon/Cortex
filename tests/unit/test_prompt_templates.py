@@ -18,8 +18,8 @@ class TestSystemPromptV1:
 
     def test_concise(self) -> None:
         tokens = estimate_tokens(SYSTEM_PROMPT_V1)
-        # Must be very short — complex prompts trigger Qwen3's thinking mode
-        assert tokens <= 20
+        # Must stay short — saves context budget for history/tools (~25 tokens)
+        assert tokens <= 30
 
 
 class TestToolInstruction:

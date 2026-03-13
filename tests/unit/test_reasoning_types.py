@@ -45,12 +45,12 @@ class TestContextBudget:
     def test_default_budget(self) -> None:
         budget = ContextBudget()
         assert budget.max_tokens == 2047
-        assert budget.reserved_output_tokens == 1024
+        assert budget.reserved_output_tokens == 512
 
     def test_input_budget(self) -> None:
         budget = ContextBudget()
-        # 2047 - 1024 = 1023
-        assert budget.input_budget == 1023
+        # 2047 - 512 = 1535
+        assert budget.input_budget == 1535
 
     def test_input_budget_custom(self) -> None:
         budget = ContextBudget(max_tokens=2047, reserved_output_tokens=512)

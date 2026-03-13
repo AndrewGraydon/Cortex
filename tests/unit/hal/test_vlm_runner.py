@@ -163,9 +163,10 @@ class TestRequestBodyBuilding:
         assert body["model"] == "default"
         assert body["messages"] == messages
         assert body["stream"] is False
-        assert body["max_tokens"] == 1024  # Reserve room for output in 2047 context
+        assert body["max_tokens"] == 512
         assert body["repetition_penalty"] == 1.3
-        assert "temperature" not in body
+        assert body["temperature"] == 0.7
+        assert body["top_p"] == 0.8
 
     def test_streaming_body(self) -> None:
         runner = VLMRunner()
