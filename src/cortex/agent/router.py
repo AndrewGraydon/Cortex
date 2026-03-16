@@ -50,13 +50,24 @@ class IntentPattern:
 BUILTIN_PATTERNS = [
     # Greeting — handled directly to avoid LLM generating a sticky greeting
     # pattern that causes Qwen3-VL-2B to repeat greetings in multi-turn.
+    # Two patterns: pure greeting, and greeting + conversational filler
+    # (but NOT greeting + real question like "Hi, what time is it?").
     IntentPattern(
         "greeting",
         IntentType.GREETING,
         [
+            # Pure greeting (optionally with punctuation)
             r"^(hey|hi|hello|howdy|good\s+(morning|afternoon|evening)|"
             r"what'?s\s+up|yo|sup|greetings?)"
             r"(\s+there|\s+cortex|\s+buddy|\s+friend)?[.,!]?\s*$",
+            # Greeting + conversational filler (not a real question)
+            r"^(hey|hi|hello|howdy)"
+            r"(\s+there|\s+cortex)?"
+            r"[.,!]?\s+"
+            r"(can\s+you\s+hear\s+me|are\s+you\s+there|is\s+(this|that|it)\s+working|"
+            r"how\s+are\s+you(\s+doing)?|how'?s\s+it\s+going|"
+            r"it'?s\s+(me|good\s+to|nice\s+to)|testing)"
+            r"[.?!]?\s*$",
         ],
     ),
     # Farewell
@@ -242,14 +253,15 @@ BUILTIN_PATTERNS = [
         tool_hint="device_control",
         extract_groups=True,
     ),
-    # Device query
+    # Device query — word boundaries on state words to avoid matching
+    # "What is one plus one" (where "one" contains "on").
     IntentPattern(
         "device_query",
         IntentType.UTILITY,
         [
             r"(?:what'?s|what\s+is)\s+(?:the\s+)?(?:state|status)\s+of\s+(?:the\s+)?(?P<device>.+)",
-            r"is\s+(?:the\s+)?(?P<device>.+?)\s+(?:on|off|open|closed|locked|unlocked)",
-            r"(?:check|get)\s+(?:the\s+)?(?P<device>.+?)\s+(?:state|status)",
+            r"^is\s+(?:the\s+)?(?P<device>.+?)\s+(?:on|off|open|closed|locked|unlocked)\b",
+            r"(?:check|get)\s+(?:the\s+)?(?P<device>.+?)\s+(?:state|status)\b",
         ],
         tool_hint="device_query",
         extract_groups=True,

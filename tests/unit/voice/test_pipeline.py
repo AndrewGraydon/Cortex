@@ -123,6 +123,37 @@ class TestContextAssemblerWiring:
         assert inputs.params == {}
 
 
+class TestGreetingResponseDetection:
+    """Greeting-like LLM responses should be excluded from history."""
+
+    def test_pure_greeting(self) -> None:
+        assert VoicePipeline._is_greeting_response("Hello! How can I help you?")
+
+    def test_greeting_with_assist(self) -> None:
+        assert VoicePipeline._is_greeting_response("Hi! What can I do for you?")
+
+    def test_i_am_cortex_short(self) -> None:
+        assert VoicePipeline._is_greeting_response("Hello, I am Cortex.")
+
+    def test_long_response_with_greeting_not_flagged(self) -> None:
+        """Longer responses with real content should NOT be flagged."""
+        assert not VoicePipeline._is_greeting_response(
+            "I'm Cortex, your local voice assistant running on a Raspberry Pi. "
+            "How can I help you today?"
+        )
+
+    def test_real_answer_not_greeting(self) -> None:
+        assert not VoicePipeline._is_greeting_response(
+            "The sky is blue because of Rayleigh scattering."
+        )
+
+    def test_factual_response(self) -> None:
+        assert not VoicePipeline._is_greeting_response("2 plus 2 equals 4.")
+
+    def test_empty_not_greeting(self) -> None:
+        assert not VoicePipeline._is_greeting_response("")
+
+
 class TestSentenceDetectorIntegration:
     def test_detector_exists(self) -> None:
         from cortex.voice.sentence_detector import SentenceDetector

@@ -6,6 +6,55 @@ from cortex.agent.router import IntentPattern, IntentRouter
 from cortex.agent.types import IntentType
 
 
+class TestGreetingRouting:
+    def test_pure_hello(self) -> None:
+        router = IntentRouter()
+        d = router.route("hello")
+        assert d.intent_type == IntentType.GREETING
+
+    def test_hey_there(self) -> None:
+        router = IntentRouter()
+        d = router.route("Hey there")
+        assert d.intent_type == IntentType.GREETING
+
+    def test_hi_cortex(self) -> None:
+        router = IntentRouter()
+        d = router.route("Hi Cortex!")
+        assert d.intent_type == IntentType.GREETING
+
+    def test_greeting_with_filler(self) -> None:
+        router = IntentRouter()
+        d = router.route("Hey there. can you hear me?")
+        assert d.intent_type == IntentType.GREETING
+
+    def test_greeting_how_are_you(self) -> None:
+        router = IntentRouter()
+        d = router.route("Hello, how are you?")
+        assert d.intent_type == IntentType.GREETING
+
+    def test_hi_is_this_working(self) -> None:
+        router = IntentRouter()
+        d = router.route("Hi there, is this working?")
+        assert d.intent_type == IntentType.GREETING
+
+    def test_greeting_with_real_question_falls_to_llm(self) -> None:
+        """Greeting + real question should NOT match greeting."""
+        router = IntentRouter()
+        d = router.route("Hi, what time is it?")
+        # Should NOT be greeting — it has a real question
+        assert d.intent_type != IntentType.GREETING
+
+    def test_greeting_with_factual_question_falls_to_llm(self) -> None:
+        router = IntentRouter()
+        d = router.route("Hey, why is the sky blue?")
+        assert d.intent_type != IntentType.GREETING
+
+    def test_good_morning(self) -> None:
+        router = IntentRouter()
+        d = router.route("Good morning")
+        assert d.intent_type == IntentType.GREETING
+
+
 class TestFarewellRouting:
     def test_goodbye(self) -> None:
         router = IntentRouter()
@@ -305,6 +354,18 @@ class TestLLMFallback:
     def test_ambiguous_text(self) -> None:
         router = IntentRouter()
         d = router.route("how do I cook pasta")
+        assert d.intent_type == IntentType.LLM
+
+    def test_what_is_word_math_goes_to_llm(self) -> None:
+        """'What is one plus one' should NOT match calculator or device_query."""
+        router = IntentRouter()
+        d = router.route("What is one plus one plus one plus 2")
+        assert d.intent_type == IntentType.LLM
+
+    def test_why_is_sky_blue_goes_to_llm(self) -> None:
+        """'Why is the sky blue' should NOT match device_query."""
+        router = IntentRouter()
+        d = router.route("Why is the sky blue")
         assert d.intent_type == IntentType.LLM
 
 

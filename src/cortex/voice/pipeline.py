@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 
@@ -48,6 +49,18 @@ FAREWELL_PATTERNS = {
 SESSION_IDLE_TIMEOUT_S = 300.0  # 5 minutes
 CROSSFADE_SAMPLES = 240  # 10ms at 24kHz
 LLM_MAX_RETRIES = 1  # Retry LLM once on failure
+
+# Greeting-like LLM responses — these poison 2B model history and cause
+# greeting loops. Detected post-LLM and excluded from conversation history.
+# Uses regex word boundaries to avoid substring matches (e.g. "hi" in "thinking").
+_GREETING_RESPONSE_RE = re.compile(
+    r"\b(?:hello|hi|hey|greetings)\b|"
+    r"how can i (?:help|assist)|"
+    r"what can i (?:do for you|help you with)|"
+    r"how may i (?:help|assist)|"
+    r"i am cortex|i'm cortex",
+    re.IGNORECASE,
+)
 
 
 class VoicePipeline:
@@ -215,9 +228,15 @@ class VoicePipeline:
             # (ContextAssembler.build_messages already includes user_message as
             # the final message, so adding it to history before the call would
             # cause the user message to appear twice in the prompt)
-            self._session.history.append({"role": "user", "content": asr_result.text})
-            if response_text:
-                self._session.history.append({"role": "assistant", "content": response_text})
+            #
+            # Skip greeting-like responses — storing them in history causes
+            # Qwen3-VL-2B to fixate on greeting patterns and ignore questions.
+            if response_text and self._is_greeting_response(response_text):
+                logger.info("Greeting response detected, excluding from history")
+            else:
+                self._session.history.append({"role": "user", "content": asr_result.text})
+                if response_text:
+                    self._session.history.append({"role": "assistant", "content": response_text})
 
             self._session.turn_count += 1
             self._session.metrics.append(metrics)
@@ -436,6 +455,25 @@ class VoicePipeline:
         """Check if text is a farewell phrase."""
         normalized = text.lower().strip().rstrip(".!?")
         return normalized in FAREWELL_PATTERNS
+
+    @staticmethod
+    def _is_greeting_response(text: str) -> bool:
+        """Detect greeting-like LLM responses that would poison history.
+
+        The Qwen3-VL-2B model fixates on greeting patterns in history,
+        causing it to repeat "Hello! How can I help you?" for every
+        subsequent question. Excluding these from history breaks the loop.
+
+        Only flags SHORT responses (<15 words) that are purely
+        greetings/self-introduction with no real content.
+        """
+        stripped = text.strip()
+        words = stripped.split()
+        # Only check very short responses — longer ones have real content
+        if len(words) > 15:
+            return False
+        # Must contain at least one greeting phrase (word-boundary matched)
+        return bool(_GREETING_RESPONSE_RE.search(stripped))
 
 
 def _now_ms() -> float:
